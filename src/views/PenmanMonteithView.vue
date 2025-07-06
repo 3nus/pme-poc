@@ -34,6 +34,9 @@ const stressCoefficient = ref<number>(1)
 // Location input mode
 const locationMode = ref<LocationInputMode>({ type: 'address' })
 
+// Temperature unit
+const temperatureUnit = ref<'C' | 'F'>('C')
+
 // Manual location input
 const locationLat = ref<number>(0)
 const locationLon = ref<number>(0)
@@ -51,8 +54,16 @@ const weatherData = ref<ProcessedWeatherData | null>(null)
 const geocodeResult = ref<GeocodeResult | null>(null)
 const loadingWeather = ref<boolean>(false)
 const loadingGeocode = ref<boolean>(false)
+const loadingLocation = ref<boolean>(false)
 const weatherError = ref<string>('')
 const geocodeError = ref<string>('')
+const locationError = ref<string>('')
+
+// Panel state
+const locationPanelMinimized = ref<boolean>(false)
+
+// Modal state
+const showTemperatureModal = ref<boolean>(false)
 
 // Address geocoding
 const geocodeAddress = async () => {
@@ -109,9 +120,12 @@ const fetchWeatherData = async () => {
     const data = await weatherService.getProcessedWeatherData(location)
     weatherData.value = data
 
-    // Auto-populate meteorological fields
-    maxTemp.value = data.maxTemperature
-    minTemp.value = data.minTemperature
+    // Show modal to inform user about temperature source
+    showTemperatureModal.value = true
+
+    // Auto-populate meteorological fields (convert to current unit)
+    maxTemp.value = temperatureUnit.value === 'F' ? celsiusToFahrenheit(data.maxTemperature) : data.maxTemperature
+    minTemp.value = temperatureUnit.value === 'F' ? celsiusToFahrenheit(data.minTemperature) : data.minTemperature
     relativeHumidity.value = data.relativeHumidity
     windSpeed.value = data.windSpeed
     
@@ -132,12 +146,125 @@ const fetchWeatherData = async () => {
   }
 }
 
+// Get current location using browser geolocation
+const getCurrentLocation = async () => {
+  if (!navigator.geolocation) {
+    locationError.value = 'Geolocation is not supported by this browser'
+    return
+  }
+
+  loadingLocation.value = true
+  locationError.value = ''
+
+  try {
+    const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        resolve,
+        reject,
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 300000 // 5 minutes
+        }
+      )
+    })
+
+    // Update coordinates
+    locationLat.value = Number(position.coords.latitude.toFixed(6))
+    locationLon.value = Number(position.coords.longitude.toFixed(6))
+
+    // Try to reverse geocode to get address
+    try {
+      const reverseResult = await geocodingService.reverseGeocode(
+        position.coords.latitude,
+        position.coords.longitude
+      )
+      
+      // Update address fields
+      addressInput.value = {
+        street: reverseResult.addressComponents.street || '',
+        city: reverseResult.addressComponents.city || '',
+        state: reverseResult.addressComponents.state || '',
+        country: reverseResult.addressComponents.country || 'United States'
+      }
+      
+      geocodeResult.value = reverseResult
+    } catch (reverseError) {
+      console.warn('Could not reverse geocode current location:', reverseError)
+      // Location coordinates are still set, just no address
+    }
+
+  } catch (error) {
+    if (error instanceof GeolocationPositionError) {
+      switch (error.code) {
+        case error.PERMISSION_DENIED:
+          locationError.value = 'Location access denied. Please enable location permissions.'
+          break
+        case error.POSITION_UNAVAILABLE:
+          locationError.value = 'Location information is unavailable.'
+          break
+        case error.TIMEOUT:
+          locationError.value = 'Location request timed out.'
+          break
+        default:
+          locationError.value = 'An unknown error occurred while getting location.'
+          break
+      }
+    } else {
+      locationError.value = 'Failed to get current location'
+    }
+  } finally {
+    loadingLocation.value = false
+  }
+}
+
 // Toggle location input mode
 const toggleLocationMode = () => {
   locationMode.value.type = locationMode.value.type === 'manual' ? 'address' : 'manual'
   // Clear errors when switching modes
   weatherError.value = ''
   geocodeError.value = ''
+  locationError.value = ''
+}
+
+// Toggle location panel minimized state
+const toggleLocationPanel = () => {
+  locationPanelMinimized.value = !locationPanelMinimized.value
+}
+
+// Temperature conversion functions
+const celsiusToFahrenheit = (celsius: number): number => {
+  return (celsius * 9/5) + 32
+}
+
+const fahrenheitToCelsius = (fahrenheit: number): number => {
+  return (fahrenheit - 32) * 5/9
+}
+
+// Temperature display helpers
+const displayTemperature = (tempC: number): number => {
+  return temperatureUnit.value === 'F' ? celsiusToFahrenheit(tempC) : tempC
+}
+
+const convertInputTemperature = (inputValue: number): number => {
+  return temperatureUnit.value === 'F' ? fahrenheitToCelsius(inputValue) : inputValue
+}
+
+// Toggle temperature unit
+const toggleTemperatureUnit = () => {
+  const currentMaxDisplay = displayTemperature(maxTemp.value)
+  const currentMinDisplay = displayTemperature(minTemp.value)
+  
+  temperatureUnit.value = temperatureUnit.value === 'C' ? 'F' : 'C'
+  
+  // Convert current values to new unit for display
+  if (temperatureUnit.value === 'F') {
+    maxTemp.value = celsiusToFahrenheit(maxTemp.value)
+    minTemp.value = celsiusToFahrenheit(minTemp.value)
+  } else {
+    maxTemp.value = fahrenheitToCelsius(maxTemp.value)
+    minTemp.value = fahrenheitToCelsius(minTemp.value)
+  }
 }
 
 // Add getDayOfYear method to Date prototype
@@ -158,7 +285,12 @@ Date.prototype.getDayOfYear = function() {
 const et0 = computed(() => {
   // This is a simplified calculation for demonstration
   // In a real implementation, you'd use the full Penman-Monteith equation
-  const avgTemp = (maxTemp.value + minTemp.value) / 2
+  
+  // Convert temperatures to Celsius for calculation
+  const maxTempC = temperatureUnit.value === 'F' ? fahrenheitToCelsius(maxTemp.value) : maxTemp.value
+  const minTempC = temperatureUnit.value === 'F' ? fahrenheitToCelsius(minTemp.value) : minTemp.value
+  
+  const avgTemp = (maxTempC + minTempC) / 2
   const tempFactor = avgTemp * 0.1
   const radiationFactor = solarRadiation.value * 0.05
   const windFactor = windSpeed.value * 0.02
@@ -174,18 +306,42 @@ const et0 = computed(() => {
 
     <div class="calculator-container">
       <!-- Weather Data Fetching Section -->
-      <div class="input-section">
-        <h2>Location & Weather Data</h2>
-        
-        <!-- Location Input Mode Toggle -->
-        <div class="location-mode-toggle">
-          <button 
-            @click="toggleLocationMode"
-            class="mode-toggle-btn"
-          >
-            {{ locationMode.type === 'address' ? 'Switch to Manual Coordinates' : 'Switch to Address Lookup' }}
-          </button>
+      <div class="input-section location-panel" :class="{ minimized: locationPanelMinimized }">
+        <div class="panel-header">
+          <h2>Location & Weather Data</h2>
+          <div class="header-controls">
+            <button 
+              @click="getCurrentLocation"
+              :disabled="loadingLocation"
+              class="current-location-btn"
+              title="Use current location"
+            >
+              {{ loadingLocation ? '📍...' : '📍 Current Location' }}
+            </button>
+            <button 
+              @click="toggleLocationPanel"
+              class="minimize-btn"
+              :title="locationPanelMinimized ? 'Expand panel' : 'Minimize panel'"
+            >
+              {{ locationPanelMinimized ? '▲' : '▼' }}
+            </button>
+          </div>
         </div>
+
+        <div v-if="locationError" class="error-message">
+          {{ locationError }}
+        </div>
+
+        <div v-show="!locationPanelMinimized" class="panel-content">
+          <!-- Location Input Mode Toggle -->
+          <div class="location-mode-toggle">
+            <button 
+              @click="toggleLocationMode"
+              class="mode-toggle-btn"
+            >
+              {{ locationMode.type === 'address' ? 'Switch to Manual Coordinates' : 'Switch to Address Lookup' }}
+            </button>
+          </div>
 
         <!-- Address Input Mode -->
         <div v-if="locationMode.type === 'address'" class="address-inputs">
@@ -296,31 +452,40 @@ const et0 = computed(() => {
             <p>Data automatically populated below from latest observations</p>
           </div>
         </div>
+        </div>
       </div>
 
       <!-- Meteorological Data Section -->
       <div class="input-section">
-        <h2>Meteorological Data</h2>
+        <div class="section-header">
+          <h2>Meteorological Data</h2>
+          <button 
+            @click="toggleTemperatureUnit"
+            class="temp-unit-btn"
+          >
+            Switch to °{{ temperatureUnit === 'C' ? 'F' : 'C' }}
+          </button>
+        </div>
 
         <div class="input-group">
-          <label for="maxTemp">Maximum Temperature (°C):</label>
+          <label for="maxTemp">Maximum Temperature (°{{ temperatureUnit }}):</label>
           <input
             id="maxTemp"
             v-model.number="maxTemp"
             type="number"
             step="0.1"
-            placeholder="Daily maximum temperature"
+            :placeholder="`Daily maximum temperature in °${temperatureUnit}`"
           />
         </div>
 
         <div class="input-group">
-          <label for="minTemp">Minimum Temperature (°C):</label>
+          <label for="minTemp">Minimum Temperature (°{{ temperatureUnit }}):</label>
           <input
             id="minTemp"
             v-model.number="minTemp"
             type="number"
             step="0.1"
-            placeholder="Daily minimum temperature"
+            :placeholder="`Daily minimum temperature in °${temperatureUnit}`"
           />
         </div>
 
@@ -525,6 +690,35 @@ const et0 = computed(() => {
         </div>
       </div>
     </div>
+
+    <!-- Temperature Data Source Modal -->
+    <div v-if="showTemperatureModal" class="modal-overlay" @click="showTemperatureModal = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h3>📊 Temperature Data Source</h3>
+          <button @click="showTemperatureModal = false" class="modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <p><strong>Temperature Information:</strong></p>
+          <ul>
+            <li>📈 <strong>Maximum Temperature:</strong> Today's forecasted high</li>
+            <li>📉 <strong>Minimum Temperature:</strong> Today's forecasted low</li>
+            <li>🌡️ <strong>Data Source:</strong> National Weather Service forecast</li>
+            <li>📅 <strong>Period:</strong> Current day's forecast</li>
+          </ul>
+          <p class="note">
+            <em>Note: These temperatures are from today's official weather forecast 
+            and provide more accurate daily temperature ranges for your Penman-Monteith calculations 
+            compared to instantaneous readings.</em>
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button @click="showTemperatureModal = false" class="modal-ok-btn">
+            Got it!
+          </button>
+        </div>
+      </div>
+    </div>
   </main>
 </template>
 
@@ -543,12 +737,37 @@ const et0 = computed(() => {
   background: #f9f9f9;
 }
 
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
 .input-section h2 {
-  margin: 0 0 1rem 0;
+  margin: 0;
   color: #2563eb;
   font-size: 1.2rem;
   border-bottom: 2px solid #2563eb;
   padding-bottom: 0.5rem;
+  flex: 1;
+}
+
+.temp-unit-btn {
+  background: #f59e0b;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+  margin-left: 1rem;
+}
+
+.temp-unit-btn:hover {
+  background: #d97706;
 }
 
 .input-group {
@@ -667,6 +886,86 @@ const et0 = computed(() => {
   font-size: 0.9rem;
 }
 
+.location-panel {
+  transition: all 0.3s ease;
+}
+
+.location-panel.minimized {
+  padding-bottom: 1rem;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.panel-header h2 {
+  margin: 0;
+  color: #2563eb;
+  font-size: 1.2rem;
+  border-bottom: 2px solid #2563eb;
+  padding-bottom: 0.5rem;
+  flex: 1;
+}
+
+.header-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: 1rem;
+}
+
+.current-location-btn {
+  background: #10b981;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.current-location-btn:hover:not(:disabled) {
+  background: #059669;
+}
+
+.current-location-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.minimize-btn {
+  background: #6b7280;
+  color: white;
+  border: none;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.2s;
+  min-width: 40px;
+}
+
+.minimize-btn:hover {
+  background: #4b5563;
+}
+
+.panel-content {
+  animation: fadeIn 0.3s ease;
+}
+
+.location-panel.minimized .panel-content {
+  display: none;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .location-mode-toggle {
   margin-bottom: 1.5rem;
 }
@@ -752,10 +1051,141 @@ const et0 = computed(() => {
   border-top: 1px solid #e5e7eb;
 }
 
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  animation: fadeIn 0.3s ease;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  max-width: 500px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  animation: slideIn 0.3s ease;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem 1.5rem 1rem 1.5rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.modal-header h3 {
+  margin: 0;
+  color: #1f2937;
+  font-size: 1.3rem;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.2s;
+}
+
+.modal-close:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.modal-body {
+  padding: 1.5rem;
+  color: #374151;
+  line-height: 1.6;
+}
+
+.modal-body ul {
+  margin: 1rem 0;
+  padding-left: 1.5rem;
+}
+
+.modal-body li {
+  margin: 0.5rem 0;
+}
+
+.modal-body .note {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: #f0f9ff;
+  border-left: 4px solid #2563eb;
+  border-radius: 4px;
+  font-size: 0.95rem;
+}
+
+.modal-footer {
+  padding: 1rem 1.5rem 1.5rem 1.5rem;
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid #e5e7eb;
+}
+
+.modal-ok-btn {
+  background: #2563eb;
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.modal-ok-btn:hover {
+  background: #1d4ed8;
+}
+
+@keyframes slideIn {
+  from { 
+    opacity: 0; 
+    transform: translateY(-20px) scale(0.95); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateY(0) scale(1); 
+  }
+}
+
 @media (max-width: 768px) {
   .input-row {
     grid-template-columns: 1fr;
     gap: 0.5rem;
+  }
+  
+  .modal-content {
+    width: 95%;
+    margin: 1rem;
+  }
+  
+  .modal-header,
+  .modal-body,
+  .modal-footer {
+    padding-left: 1rem;
+    padding-right: 1rem;
   }
 }
 

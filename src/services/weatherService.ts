@@ -40,7 +40,7 @@ class WeatherService {
    * @param location - Latitude and longitude
    * @returns Promise with point data including forecast URLs
    */
-  async getPointData(location: Location): Promise<any> {
+  async getPointData(location: Location): Promise<Record<string, unknown>> {
     const lat = location.latitude.toFixed(4)
     const lon = location.longitude.toFixed(4)
     
@@ -199,16 +199,33 @@ class WeatherService {
         throw new Error('No weather data available for the specified location')
       }
 
-      // Get gridpoints data which contains current observations
-      const gridX = pointData.properties.gridX
-      const gridY = pointData.properties.gridY
-      const gridId = pointData.properties.gridId
+      const properties = pointData.properties as any
+      const gridX = properties.gridX
+      const gridY = properties.gridY
+      const gridId = properties.gridId
+      const forecastUrl = properties.forecast
       
-      if (!gridX || !gridY || !gridId) {
+      if (!gridX || !gridY || !gridId || !forecastUrl) {
         throw new Error('Invalid grid data from weather service')
       }
 
-      // Get current conditions from gridpoints
+      // Get forecast data for daily min/max temperatures
+      const forecastResponse = await this.axiosInstance.get(forecastUrl)
+      
+      if (!forecastResponse.data || !forecastResponse.data.properties || !forecastResponse.data.properties.periods) {
+        throw new Error('No forecast data available')
+      }
+
+      // Get today's forecast periods (day and night)
+      const periods = forecastResponse.data.properties.periods
+      const todayPeriods = periods.slice(0, 2) // Today's day and night periods
+      
+      // Extract temperatures from today's periods
+      const temperatures = todayPeriods.map((period: any) => period.temperature)
+      const maxTemp = Math.max(...temperatures)
+      const minTemp = Math.min(...temperatures)
+
+      // Get current conditions from gridpoints for other weather data
       const gridResponse = await this.axiosInstance.get(
         `/gridpoints/${gridId}/${gridX},${gridY}`
       )
@@ -218,16 +235,6 @@ class WeatherService {
       }
 
       const gridData = gridResponse.data.properties
-      
-      // Extract temperature data
-      const tempData = gridData.temperature
-      const currentTemp = tempData && tempData.values && tempData.values.length > 0 
-        ? this.convertTemperatureFromGrid(tempData.values[0].value, tempData.uom) 
-        : 20
-
-      // For daily min/max, we'll use a simple estimation since gridpoints gives us current conditions
-      const maxTemp = currentTemp + 5
-      const minTemp = currentTemp - 5
 
       // Extract humidity data
       const humidityData = gridData.relativeHumidity
@@ -237,14 +244,15 @@ class WeatherService {
 
       // Extract wind speed data
       const windData = gridData.windSpeed
-      const windSpeed = windData && windData.values && windData.values.length > 0
+      const windSpeedValue = windData && windData.values && windData.values.length > 0
         ? this.convertWindSpeedFromGrid(windData.values[0].value, windData.uom)
         : 2
+      const windSpeed = windSpeedValue || 2
 
       const processedData: ProcessedWeatherData = {
         maxTemperature: maxTemp,
         minTemperature: minTemp,
-        relativeHumidity: relativeHumidity,
+        relativeHumidity: relativeHumidity || 50,
         windSpeed: windSpeed,
         solarRadiation: undefined, // Solar radiation not available from weather.gov, needs to be estimated
         station: {
@@ -252,7 +260,7 @@ class WeatherService {
           name: `Weather Grid ${gridId} (${gridX},${gridY})`,
           latitude: location.latitude,
           longitude: location.longitude,
-          elevation: pointData.properties.relativeLocation?.properties?.distance?.value || 0
+          elevation: (pointData.properties as any).relativeLocation?.properties?.distance?.value || 0
         },
         timestamp: new Date().toISOString()
       }
