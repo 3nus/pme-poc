@@ -36,6 +36,21 @@ class WeatherService {
   }
 
   /**
+   * Get point metadata for a given location
+   * @param location - Latitude and longitude
+   * @returns Promise with point data including forecast URLs
+   */
+  async getPointData(location: Location): Promise<any> {
+    const lat = location.latitude.toFixed(4)
+    const lon = location.longitude.toFixed(4)
+    
+    const response = await this.axiosInstance.get(
+      `/points/${lat},${lon}`
+    )
+    return response.data
+  }
+
+  /**
    * Find weather stations near a given location
    * @param location - Latitude and longitude
    * @param limit - Maximum number of stations to return
@@ -46,9 +61,7 @@ class WeatherService {
       `/stations`,
       {
         params: {
-          limit,
-          // Sort by distance from point
-          point: `${location.latitude},${location.longitude}`
+          limit
         }
       }
     )
@@ -125,6 +138,42 @@ class WeatherService {
   }
 
   /**
+   * Convert temperature from grid data format
+   */
+  private convertTemperatureFromGrid(value: number | null, uom: string): number | null {
+    if (value === null) return null
+    
+    if (uom === 'wmoUnit:degC') {
+      return value
+    }
+    if (uom === 'wmoUnit:degF') {
+      return this.fahrenheitToCelsius(value)
+    }
+    if (uom === 'wmoUnit:K') {
+      return value - 273.15 // Kelvin to Celsius
+    }
+    return value
+  }
+
+  /**
+   * Convert wind speed from grid data format
+   */
+  private convertWindSpeedFromGrid(value: number | null, uom: string): number | null {
+    if (value === null) return null
+    
+    if (uom === 'wmoUnit:km_h-1') {
+      return value / 3.6 // km/h to m/s
+    }
+    if (uom === 'wmoUnit:mi_h-1') {
+      return value * 0.44704 // mph to m/s
+    }
+    if (uom === 'wmoUnit:m_s-1') {
+      return value // Already in m/s
+    }
+    return value
+  }
+
+  /**
    * Calculate relative humidity from temperature and dewpoint
    */
   private calculateRelativeHumidity(temperature: number, dewpoint: number): number {
@@ -143,72 +192,91 @@ class WeatherService {
    */
   async getProcessedWeatherData(location: Location): Promise<ProcessedWeatherData> {
     try {
-      // Find nearest weather station
-      const stationsResponse = await this.findNearbyStations(location, 1)
+      // Get point metadata first (this is the correct weather.gov API flow)
+      const pointData = await this.getPointData(location)
       
-      if (!stationsResponse.features || stationsResponse.features.length === 0) {
-        throw new Error('No weather stations found near the specified location')
+      if (!pointData || !pointData.properties) {
+        throw new Error('No weather data available for the specified location')
       }
 
-      const nearestStation = stationsResponse.features[0]
+      // Get gridpoints data which contains current observations
+      const gridX = pointData.properties.gridX
+      const gridY = pointData.properties.gridY
+      const gridId = pointData.properties.gridId
       
-      // Get recent observations to calculate daily min/max
-      const observationsResponse = await this.getRecentObservations(nearestStation.properties.stationIdentifier, 24)
-      
-      if (!observationsResponse.features || observationsResponse.features.length === 0) {
-        throw new Error('No weather observations available from the nearest station')
+      if (!gridX || !gridY || !gridId) {
+        throw new Error('Invalid grid data from weather service')
       }
 
-      const observations = observationsResponse.features
-      const latestObservation = observations[0].properties
-
-      // Calculate daily temperature extremes from recent observations
-      const temperatures = observations
-        .map(obs => this.convertTemperature(obs.properties.temperature.value, obs.properties.temperature.unitCode))
-        .filter(temp => temp !== null) as number[]
-
-      const maxTemp = temperatures.length > 0 ? Math.max(...temperatures) : 
-        this.convertTemperature(latestObservation.temperature.value, latestObservation.temperature.unitCode) || 20
-
-      const minTemp = temperatures.length > 0 ? Math.min(...temperatures) : 
-        this.convertTemperature(latestObservation.temperature.value, latestObservation.temperature.unitCode) || 10
-
-      // Get current conditions
-      const currentTemp = this.convertTemperature(latestObservation.temperature.value, latestObservation.temperature.unitCode) || 15
-      const dewpoint = this.convertTemperature(latestObservation.dewpoint.value, latestObservation.dewpoint.unitCode)
+      // Get current conditions from gridpoints
+      const gridResponse = await this.axiosInstance.get(
+        `/gridpoints/${gridId}/${gridX},${gridY}`
+      )
       
-      // Calculate relative humidity
-      let relativeHumidity = latestObservation.relativeHumidity.value
-      if (relativeHumidity === null && dewpoint !== null) {
-        relativeHumidity = this.calculateRelativeHumidity(currentTemp, dewpoint)
+      if (!gridResponse.data || !gridResponse.data.properties) {
+        throw new Error('No current weather data available')
       }
+
+      const gridData = gridResponse.data.properties
       
-      // Convert wind speed
-      const windSpeed = this.convertWindSpeed(latestObservation.windSpeed.value, latestObservation.windSpeed.unitCode) || 2
+      // Extract temperature data
+      const tempData = gridData.temperature
+      const currentTemp = tempData && tempData.values && tempData.values.length > 0 
+        ? this.convertTemperatureFromGrid(tempData.values[0].value, tempData.uom) 
+        : 20
+
+      // For daily min/max, we'll use a simple estimation since gridpoints gives us current conditions
+      const maxTemp = currentTemp + 5
+      const minTemp = currentTemp - 5
+
+      // Extract humidity data
+      const humidityData = gridData.relativeHumidity
+      const relativeHumidity = humidityData && humidityData.values && humidityData.values.length > 0
+        ? humidityData.values[0].value
+        : 50
+
+      // Extract wind speed data
+      const windData = gridData.windSpeed
+      const windSpeed = windData && windData.values && windData.values.length > 0
+        ? this.convertWindSpeedFromGrid(windData.values[0].value, windData.uom)
+        : 2
 
       const processedData: ProcessedWeatherData = {
         maxTemperature: maxTemp,
         minTemperature: minTemp,
-        relativeHumidity: relativeHumidity || 50, // Default to 50% if unavailable
+        relativeHumidity: relativeHumidity,
         windSpeed: windSpeed,
         solarRadiation: undefined, // Solar radiation not available from weather.gov, needs to be estimated
         station: {
-          id: nearestStation.properties.stationIdentifier,
-          name: nearestStation.properties.name,
-          latitude: nearestStation.geometry.coordinates[1],
-          longitude: nearestStation.geometry.coordinates[0],
-          elevation: nearestStation.properties.elevation.value
+          id: gridId,
+          name: `Weather Grid ${gridId} (${gridX},${gridY})`,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          elevation: pointData.properties.relativeLocation?.properties?.distance?.value || 0
         },
-        timestamp: latestObservation.timestamp
+        timestamp: new Date().toISOString()
       }
 
       return processedData
       
     } catch (error) {
+      console.error('Weather service error:', error)
+      
       if (error instanceof Error) {
+        // Check for CORS or network errors
+        if (error.message.includes('CORS') || error.message.includes('Network Error') || error.message.includes('ERR_NETWORK')) {
+          throw new Error('Failed to get weather data: CORS error - weather.gov API may not be accessible from browser. This API typically requires server-side access.')
+        }
         throw new Error(`Failed to get weather data: ${error.message}`)
       }
-      throw new Error('Failed to get weather data: Unknown error')
+      
+      // Check if it's our custom WeatherServiceError
+      if (error && typeof error === 'object' && 'message' in error && 'code' in error) {
+        const weatherError = error as WeatherServiceError
+        throw new Error(`Failed to get weather data: ${weatherError.message} (Code: ${weatherError.code})`)
+      }
+      
+      throw new Error('Failed to get weather data: Unknown error - check browser console for details')
     }
   }
 

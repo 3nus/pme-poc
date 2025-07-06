@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import weatherService from '@/services/weatherService'
+import geocodingService from '@/services/geocodingService'
 import type { ProcessedWeatherData, Location } from '@/types/weather'
+import type { Address, GeocodeResult, LocationInputMode } from '@/types/geocoding'
 
 // Meteorological Data
 const maxTemp = ref<number>(0)
@@ -29,17 +31,69 @@ const surfaceResistance = ref<number>(0)
 const cropCoefficient = ref<number>(1)
 const stressCoefficient = ref<number>(1)
 
-// Location for weather data
+// Location input mode
+const locationMode = ref<LocationInputMode>({ type: 'address' })
+
+// Manual location input
 const locationLat = ref<number>(0)
 const locationLon = ref<number>(0)
+
+// Address-based location input
+const addressInput = ref<Address>({
+  street: '',
+  city: '',
+  state: '',
+  country: 'United States'
+})
+
+// Location services state
 const weatherData = ref<ProcessedWeatherData | null>(null)
+const geocodeResult = ref<GeocodeResult | null>(null)
 const loadingWeather = ref<boolean>(false)
+const loadingGeocode = ref<boolean>(false)
 const weatherError = ref<string>('')
+const geocodeError = ref<string>('')
+
+// Address geocoding
+const geocodeAddress = async () => {
+  if (!geocodingService.validateAddress(addressInput.value)) {
+    geocodeError.value = 'Please enter at least city and state'
+    return
+  }
+
+  loadingGeocode.value = true
+  geocodeError.value = ''
+
+  try {
+    const result = await geocodingService.geocodeAddress(addressInput.value)
+    geocodeResult.value = result
+    
+    // Update manual lat/lon fields
+    locationLat.value = result.latitude
+    locationLon.value = result.longitude
+
+  } catch (error) {
+    geocodeError.value = error instanceof Error ? error.message : 'Failed to geocode address'
+    geocodeResult.value = null
+  } finally {
+    loadingGeocode.value = false
+  }
+}
 
 // Weather data fetching
 const fetchWeatherData = async () => {
-  if (locationLat.value === 0 || locationLon.value === 0) {
-    weatherError.value = 'Please enter valid latitude and longitude'
+  let targetLat = locationLat.value
+  let targetLon = locationLon.value
+
+  // If in address mode and no coordinates, try to geocode first
+  if (locationMode.value.type === 'address' && (targetLat === 0 || targetLon === 0)) {
+    await geocodeAddress()
+    targetLat = locationLat.value
+    targetLon = locationLon.value
+  }
+
+  if (targetLat === 0 || targetLon === 0) {
+    weatherError.value = 'Please provide valid location coordinates or address'
     return
   }
 
@@ -48,8 +102,8 @@ const fetchWeatherData = async () => {
 
   try {
     const location: Location = {
-      latitude: locationLat.value,
-      longitude: locationLon.value
+      latitude: targetLat,
+      longitude: targetLon
     }
 
     const data = await weatherService.getProcessedWeatherData(location)
@@ -63,7 +117,7 @@ const fetchWeatherData = async () => {
     
     // Estimate solar radiation
     const dayOfYear = new Date().getDayOfYear()
-    const estimatedSolarRadiation = weatherService.estimateSolarRadiation(locationLat.value, dayOfYear)
+    const estimatedSolarRadiation = weatherService.estimateSolarRadiation(targetLat, dayOfYear)
     solarRadiation.value = estimatedSolarRadiation
 
     // Auto-populate site-specific data
@@ -76,6 +130,14 @@ const fetchWeatherData = async () => {
   } finally {
     loadingWeather.value = false
   }
+}
+
+// Toggle location input mode
+const toggleLocationMode = () => {
+  locationMode.value.type = locationMode.value.type === 'manual' ? 'address' : 'manual'
+  // Clear errors when switching modes
+  weatherError.value = ''
+  geocodeError.value = ''
 }
 
 // Add getDayOfYear method to Date prototype
@@ -113,49 +175,126 @@ const et0 = computed(() => {
     <div class="calculator-container">
       <!-- Weather Data Fetching Section -->
       <div class="input-section">
-        <h2>Fetch Weather Data</h2>
+        <h2>Location & Weather Data</h2>
         
-        <div class="input-group">
-          <label for="locationLat">Latitude:</label>
-          <input 
-            id="locationLat" 
-            v-model.number="locationLat" 
-            type="number" 
-            step="0.000001" 
-            min="-90" 
-            max="90"
-            placeholder="e.g., 40.7128 (New York)"
-          />
+        <!-- Location Input Mode Toggle -->
+        <div class="location-mode-toggle">
+          <button 
+            @click="toggleLocationMode"
+            class="mode-toggle-btn"
+          >
+            {{ locationMode.type === 'address' ? 'Switch to Manual Coordinates' : 'Switch to Address Lookup' }}
+          </button>
         </div>
-        
-        <div class="input-group">
-          <label for="locationLon">Longitude:</label>
-          <input 
-            id="locationLon" 
-            v-model.number="locationLon" 
-            type="number" 
-            step="0.000001" 
-            min="-180" 
-            max="180"
-            placeholder="e.g., -74.0060 (New York)"
-          />
+
+        <!-- Address Input Mode -->
+        <div v-if="locationMode.type === 'address'" class="address-inputs">
+          <h3>Address Lookup</h3>
+          
+          <div class="input-group">
+            <label for="street">Street Address (optional):</label>
+            <input 
+              id="street" 
+              v-model="addressInput.street" 
+              type="text" 
+              placeholder="e.g., 123 Main Street"
+            />
+          </div>
+          
+          <div class="input-row">
+            <div class="input-group">
+              <label for="city">City:</label>
+              <input 
+                id="city" 
+                v-model="addressInput.city" 
+                type="text" 
+                placeholder="e.g., New York"
+                required
+              />
+            </div>
+            
+            <div class="input-group">
+              <label for="state">State:</label>
+              <input 
+                id="state" 
+                v-model="addressInput.state" 
+                type="text" 
+                placeholder="e.g., NY"
+                required
+              />
+            </div>
+          </div>
+          
+          <button 
+            @click="geocodeAddress" 
+            :disabled="loadingGeocode"
+            class="geocode-btn"
+          >
+            {{ loadingGeocode ? 'Looking up...' : 'Find Coordinates' }}
+          </button>
+          
+          <div v-if="geocodeError" class="error-message">
+            {{ geocodeError }}
+          </div>
+          
+          <div v-if="geocodeResult" class="geocode-info">
+            <h4>Found Location:</h4>
+            <p>{{ geocodeResult.formattedAddress }}</p>
+            <p>Coordinates: {{ geocodeResult.latitude.toFixed(6) }}, {{ geocodeResult.longitude.toFixed(6) }}</p>
+          </div>
         </div>
-        
-        <button 
-          @click="fetchWeatherData" 
-          :disabled="loadingWeather"
-          class="weather-fetch-btn"
-        >
-          {{ loadingWeather ? 'Loading...' : 'Fetch Weather Data' }}
-        </button>
-        
-        <div v-if="weatherError" class="error-message">
-          {{ weatherError }}
+
+        <!-- Manual Coordinates Input Mode -->
+        <div v-if="locationMode.type === 'manual'" class="manual-inputs">
+          <h3>Manual Coordinates</h3>
+          
+          <div class="input-row">
+            <div class="input-group">
+              <label for="locationLat">Latitude:</label>
+              <input 
+                id="locationLat" 
+                v-model.number="locationLat" 
+                type="number" 
+                step="0.000001" 
+                min="-90" 
+                max="90"
+                placeholder="e.g., 40.7128"
+              />
+            </div>
+            
+            <div class="input-group">
+              <label for="locationLon">Longitude:</label>
+              <input 
+                id="locationLon" 
+                v-model.number="locationLon" 
+                type="number" 
+                step="0.000001" 
+                min="-180" 
+                max="180"
+                placeholder="e.g., -74.0060"
+              />
+            </div>
+          </div>
         </div>
-        
-        <div v-if="weatherData" class="weather-info">
-          <h3>Weather Station: {{ weatherData.station.name }}</h3>
-          <p>Data automatically populated below from latest observations</p>
+
+        <!-- Weather Data Fetch Button -->
+        <div class="weather-fetch-section">
+          <button 
+            @click="fetchWeatherData" 
+            :disabled="loadingWeather || loadingGeocode"
+            class="weather-fetch-btn"
+          >
+            {{ loadingWeather ? 'Loading Weather...' : 'Fetch Weather Data' }}
+          </button>
+          
+          <div v-if="weatherError" class="error-message">
+            {{ weatherError }}
+          </div>
+          
+          <div v-if="weatherData" class="weather-info">
+            <h3>Weather Station: {{ weatherData.station.name }}</h3>
+            <p>Data automatically populated below from latest observations</p>
+          </div>
         </div>
       </div>
 
@@ -526,6 +665,98 @@ const et0 = computed(() => {
 .weather-info p {
   margin: 0;
   font-size: 0.9rem;
+}
+
+.location-mode-toggle {
+  margin-bottom: 1.5rem;
+}
+
+.mode-toggle-btn {
+  background: #6366f1;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.mode-toggle-btn:hover {
+  background: #4f46e5;
+}
+
+.address-inputs,
+.manual-inputs {
+  margin-bottom: 1.5rem;
+}
+
+.address-inputs h3,
+.manual-inputs h3 {
+  margin: 0 0 1rem 0;
+  color: #374151;
+  font-size: 1.1rem;
+}
+
+.input-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.geocode-btn {
+  background: #8b5cf6;
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 4px;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+  margin-top: 1rem;
+}
+
+.geocode-btn:hover:not(:disabled) {
+  background: #7c3aed;
+}
+
+.geocode-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.geocode-info {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  color: #374151;
+}
+
+.geocode-info h4 {
+  margin: 0 0 0.5rem 0;
+  color: #1f2937;
+}
+
+.geocode-info p {
+  margin: 0.25rem 0;
+  font-size: 0.9rem;
+}
+
+.weather-fetch-section {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #e5e7eb;
+}
+
+@media (max-width: 768px) {
+  .input-row {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
 }
 
 @media (min-width: 768px) {
