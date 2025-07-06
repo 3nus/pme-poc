@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import weatherService from '@/services/weatherService'
+import type { ProcessedWeatherData, Location } from '@/types/weather'
 
 // Meteorological Data
 const maxTemp = ref<number>(0)
@@ -27,7 +29,70 @@ const surfaceResistance = ref<number>(0)
 const cropCoefficient = ref<number>(1)
 const stressCoefficient = ref<number>(1)
 
-// Simple ET0 calculation placeholder
+// Location for weather data
+const locationLat = ref<number>(0)
+const locationLon = ref<number>(0)
+const weatherData = ref<ProcessedWeatherData | null>(null)
+const loadingWeather = ref<boolean>(false)
+const weatherError = ref<string>('')
+
+// Weather data fetching
+const fetchWeatherData = async () => {
+  if (locationLat.value === 0 || locationLon.value === 0) {
+    weatherError.value = 'Please enter valid latitude and longitude'
+    return
+  }
+
+  loadingWeather.value = true
+  weatherError.value = ''
+
+  try {
+    const location: Location = {
+      latitude: locationLat.value,
+      longitude: locationLon.value
+    }
+
+    const data = await weatherService.getProcessedWeatherData(location)
+    weatherData.value = data
+
+    // Auto-populate meteorological fields
+    maxTemp.value = data.maxTemperature
+    minTemp.value = data.minTemperature
+    relativeHumidity.value = data.relativeHumidity
+    windSpeed.value = data.windSpeed
+    
+    // Estimate solar radiation
+    const dayOfYear = new Date().getDayOfYear()
+    const estimatedSolarRadiation = weatherService.estimateSolarRadiation(locationLat.value, dayOfYear)
+    solarRadiation.value = estimatedSolarRadiation
+
+    // Auto-populate site-specific data
+    altitude.value = data.station.elevation
+    latitude.value = data.station.latitude
+
+  } catch (error) {
+    weatherError.value = error instanceof Error ? error.message : 'Failed to fetch weather data'
+    weatherData.value = null
+  } finally {
+    loadingWeather.value = false
+  }
+}
+
+// Add getDayOfYear method to Date prototype
+declare global {
+  interface Date {
+    getDayOfYear(): number
+  }
+}
+
+Date.prototype.getDayOfYear = function() {
+  const start = new Date(this.getFullYear(), 0, 0)
+  const diff = this.getTime() - start.getTime()
+  const oneDay = 1000 * 60 * 60 * 24
+  return Math.floor(diff / oneDay)
+}
+
+// For Kieran: Simple ET0 calculation placeholder
 const et0 = computed(() => {
   // This is a simplified calculation for demonstration
   // In a real implementation, you'd use the full Penman-Monteith equation
@@ -36,7 +101,7 @@ const et0 = computed(() => {
   const radiationFactor = solarRadiation.value * 0.05
   const windFactor = windSpeed.value * 0.02
   const humidityFactor = relativeHumidity.value * 0.01
-  
+
   return Math.max(0, tempFactor + radiationFactor + windFactor - humidityFactor)
 })
 </script>
@@ -44,66 +109,114 @@ const et0 = computed(() => {
 <template>
   <main>
     <h1>Penman-Monteith ET₀ Calculator</h1>
-    
+
     <div class="calculator-container">
+      <!-- Weather Data Fetching Section -->
+      <div class="input-section">
+        <h2>Fetch Weather Data</h2>
+        
+        <div class="input-group">
+          <label for="locationLat">Latitude:</label>
+          <input 
+            id="locationLat" 
+            v-model.number="locationLat" 
+            type="number" 
+            step="0.000001" 
+            min="-90" 
+            max="90"
+            placeholder="e.g., 40.7128 (New York)"
+          />
+        </div>
+        
+        <div class="input-group">
+          <label for="locationLon">Longitude:</label>
+          <input 
+            id="locationLon" 
+            v-model.number="locationLon" 
+            type="number" 
+            step="0.000001" 
+            min="-180" 
+            max="180"
+            placeholder="e.g., -74.0060 (New York)"
+          />
+        </div>
+        
+        <button 
+          @click="fetchWeatherData" 
+          :disabled="loadingWeather"
+          class="weather-fetch-btn"
+        >
+          {{ loadingWeather ? 'Loading...' : 'Fetch Weather Data' }}
+        </button>
+        
+        <div v-if="weatherError" class="error-message">
+          {{ weatherError }}
+        </div>
+        
+        <div v-if="weatherData" class="weather-info">
+          <h3>Weather Station: {{ weatherData.station.name }}</h3>
+          <p>Data automatically populated below from latest observations</p>
+        </div>
+      </div>
+
       <!-- Meteorological Data Section -->
       <div class="input-section">
         <h2>Meteorological Data</h2>
-        
+
         <div class="input-group">
           <label for="maxTemp">Maximum Temperature (°C):</label>
-          <input 
-            id="maxTemp" 
-            v-model.number="maxTemp" 
-            type="number" 
-            step="0.1" 
+          <input
+            id="maxTemp"
+            v-model.number="maxTemp"
+            type="number"
+            step="0.1"
             placeholder="Daily maximum temperature"
           />
         </div>
-        
+
         <div class="input-group">
           <label for="minTemp">Minimum Temperature (°C):</label>
-          <input 
-            id="minTemp" 
-            v-model.number="minTemp" 
-            type="number" 
-            step="0.1" 
+          <input
+            id="minTemp"
+            v-model.number="minTemp"
+            type="number"
+            step="0.1"
             placeholder="Daily minimum temperature"
           />
         </div>
-        
+
         <div class="input-group">
           <label for="relativeHumidity">Relative Humidity (%):</label>
-          <input 
-            id="relativeHumidity" 
-            v-model.number="relativeHumidity" 
-            type="number" 
-            step="0.1" 
-            min="0" 
+          <input
+            id="relativeHumidity"
+            v-model.number="relativeHumidity"
+            type="number"
+            step="0.1"
+            min="0"
             max="100"
             placeholder="Relative humidity"
           />
         </div>
-        
+
         <div class="input-group">
           <label for="windSpeed">Wind Speed (m/s):</label>
-          <input 
-            id="windSpeed" 
-            v-model.number="windSpeed" 
-            type="number" 
-            step="0.1" 
+          <input
+            id="windSpeed"
+            v-model.number="windSpeed"
+            type="number"
+            step="0.1"
             min="0"
             placeholder="Wind speed at 2m height"
           />
         </div>
-        
+
         <div class="input-group">
           <label for="solarRadiation">Solar Radiation (MJ/m²/day):</label>
-          <input 
-            id="solarRadiation" 
-            v-model.number="solarRadiation" 
-            type="number" 
-            step="0.1" 
+          <input
+            id="solarRadiation"
+            v-model.number="solarRadiation"
+            type="number"
+            step="0.1"
             min="0"
             placeholder="Solar radiation"
           />
@@ -113,26 +226,26 @@ const et0 = computed(() => {
       <!-- Site-Specific Data Section -->
       <div class="input-section">
         <h2>Site-Specific Data</h2>
-        
+
         <div class="input-group">
           <label for="altitude">Altitude (m):</label>
-          <input 
-            id="altitude" 
-            v-model.number="altitude" 
-            type="number" 
+          <input
+            id="altitude"
+            v-model.number="altitude"
+            type="number"
             step="1"
             placeholder="Elevation above sea level"
           />
         </div>
-        
+
         <div class="input-group">
           <label for="latitude">Latitude (degrees):</label>
-          <input 
-            id="latitude" 
-            v-model.number="latitude" 
-            type="number" 
-            step="0.01" 
-            min="-90" 
+          <input
+            id="latitude"
+            v-model.number="latitude"
+            type="number"
+            step="0.01"
+            min="-90"
             max="90"
             placeholder="Latitude (+ for North, - for South)"
           />
@@ -142,57 +255,57 @@ const et0 = computed(() => {
       <!-- Key Parameters Section -->
       <div class="input-section">
         <h2>Key Parameters</h2>
-        
+
         <div class="input-group">
           <label for="netRadiation">Net Radiation (MJ/m²/day):</label>
-          <input 
-            id="netRadiation" 
-            v-model.number="netRadiation" 
-            type="number" 
+          <input
+            id="netRadiation"
+            v-model.number="netRadiation"
+            type="number"
             step="0.1"
             placeholder="Net radiation (if known)"
           />
         </div>
-        
+
         <div class="input-group">
           <label for="soilHeatFlux">Soil Heat Flux (MJ/m²/day):</label>
-          <input 
-            id="soilHeatFlux" 
-            v-model.number="soilHeatFlux" 
-            type="number" 
+          <input
+            id="soilHeatFlux"
+            v-model.number="soilHeatFlux"
+            type="number"
             step="0.1"
             placeholder="Soil heat flux (typically 0 for daily)"
           />
         </div>
-        
+
         <div class="input-group">
           <label for="vaporPressureDeficit">Vapor Pressure Deficit (kPa):</label>
-          <input 
-            id="vaporPressureDeficit" 
-            v-model.number="vaporPressureDeficit" 
-            type="number" 
+          <input
+            id="vaporPressureDeficit"
+            v-model.number="vaporPressureDeficit"
+            type="number"
             step="0.01"
             placeholder="Vapor pressure deficit"
           />
         </div>
-        
+
         <div class="input-group">
           <label for="psychrometricConstant">Psychrometric Constant (kPa/°C):</label>
-          <input 
-            id="psychrometricConstant" 
-            v-model.number="psychrometricConstant" 
-            type="number" 
+          <input
+            id="psychrometricConstant"
+            v-model.number="psychrometricConstant"
+            type="number"
             step="0.001"
             placeholder="Psychrometric constant"
           />
         </div>
-        
+
         <div class="input-group">
           <label for="slopeVaporPressure">Slope of Vapor Pressure Curve (kPa/°C):</label>
-          <input 
-            id="slopeVaporPressure" 
-            v-model.number="slopeVaporPressure" 
-            type="number" 
+          <input
+            id="slopeVaporPressure"
+            v-model.number="slopeVaporPressure"
+            type="number"
             step="0.001"
             placeholder="Slope of saturation vapor pressure curve"
           />
@@ -202,24 +315,24 @@ const et0 = computed(() => {
       <!-- Resistance Factors Section -->
       <div class="input-section">
         <h2>Resistance Factors</h2>
-        
+
         <div class="input-group">
           <label for="aerodynamicResistance">Aerodynamic Resistance (s/m):</label>
-          <input 
-            id="aerodynamicResistance" 
-            v-model.number="aerodynamicResistance" 
-            type="number" 
+          <input
+            id="aerodynamicResistance"
+            v-model.number="aerodynamicResistance"
+            type="number"
             step="0.1"
             placeholder="Aerodynamic resistance"
           />
         </div>
-        
+
         <div class="input-group">
           <label for="surfaceResistance">Surface Resistance (s/m):</label>
-          <input 
-            id="surfaceResistance" 
-            v-model.number="surfaceResistance" 
-            type="number" 
+          <input
+            id="surfaceResistance"
+            v-model.number="surfaceResistance"
+            type="number"
             step="0.1"
             placeholder="Surface/stomatal resistance"
           />
@@ -229,27 +342,27 @@ const et0 = computed(() => {
       <!-- Crop Factors Section -->
       <div class="input-section">
         <h2>Crop Factors (Optional)</h2>
-        
+
         <div class="input-group">
           <label for="cropCoefficient">Crop Coefficient (Kc):</label>
-          <input 
-            id="cropCoefficient" 
-            v-model.number="cropCoefficient" 
-            type="number" 
-            step="0.01" 
+          <input
+            id="cropCoefficient"
+            v-model.number="cropCoefficient"
+            type="number"
+            step="0.01"
             min="0"
             placeholder="Crop coefficient (default: 1.0)"
           />
         </div>
-        
+
         <div class="input-group">
           <label for="stressCoefficient">Stress Coefficient (Ks):</label>
-          <input 
-            id="stressCoefficient" 
-            v-model.number="stressCoefficient" 
-            type="number" 
-            step="0.01" 
-            min="0" 
+          <input
+            id="stressCoefficient"
+            v-model.number="stressCoefficient"
+            type="number"
+            step="0.01"
+            min="0"
             max="1"
             placeholder="Stress coefficient (default: 1.0)"
           />
@@ -263,9 +376,13 @@ const et0 = computed(() => {
           <strong>Reference Evapotranspiration (ET₀): {{ et0.toFixed(2) }} mm/day</strong>
         </div>
         <div class="result-note">
-          <p><em>Note: This is a simplified calculation for demonstration purposes. 
-          A complete implementation would use the full FAO-56 Penman-Monteith equation 
-          with proper parameter calculations and validations.</em></p>
+          <p>
+            <em
+              >Note: This is a simplified calculation for demonstration purposes. A complete
+              implementation would use the full FAO-56 Penman-Monteith equation with proper
+              parameter calculations and validations.</em
+            >
+          </p>
         </div>
       </div>
     </div>
@@ -360,13 +477,64 @@ const et0 = computed(() => {
   line-height: 1.4;
 }
 
+.weather-fetch-btn {
+  background: #10b981;
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 4px;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+  margin-top: 1rem;
+}
+
+.weather-fetch-btn:hover:not(:disabled) {
+  background: #059669;
+}
+
+.weather-fetch-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.error-message {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  color: #dc2626;
+  font-size: 0.9rem;
+}
+
+.weather-info {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #e6fffa;
+  border: 1px solid #81e6d9;
+  border-radius: 4px;
+  color: #065f46;
+}
+
+.weather-info h3 {
+  margin: 0 0 0.5rem 0;
+  color: #047857;
+}
+
+.weather-info p {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
 @media (min-width: 768px) {
   .calculator-container {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 2rem;
   }
-  
+
   .result-section {
     grid-column: 1 / -1;
   }
