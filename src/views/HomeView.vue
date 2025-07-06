@@ -1,48 +1,30 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 
 const showInfo = ref(false)
-const value1 = ref<number>(0)
-const value2 = ref<number>(0)
 
 const toggleInfo = () => {
   showInfo.value = !showInfo.value
 }
-
-const sum = computed(() => {
-  return value1.value + value2.value
-})
 </script>
 
 <template>
   <main>
-    <h1><a href="#" @click="toggleInfo">Penman-Monteith</a> equation calculator</h1>
+    <h1><a href="#" @click="toggleInfo">Penman-Monteith</a> Equation Calculator</h1>
     
-    <div class="calculator-section">
-      <div class="input-group">
-        <label for="value1">Value 1:</label>
-        <input 
-          id="value1" 
-          v-model.number="value1" 
-          type="number" 
-          step="0.01" 
-          placeholder="Enter first value"
-        />
-      </div>
+    <div class="welcome-section">
+      <p>Welcome to the Penman-Monteith equation calculator. Choose from the options below:</p>
       
-      <div class="input-group">
-        <label for="value2">Value 2:</label>
-        <input 
-          id="value2" 
-          v-model.number="value2" 
-          type="number" 
-          step="0.01" 
-          placeholder="Enter second value"
-        />
-      </div>
-      
-      <div class="result">
-        <strong>Sum: {{ sum }}</strong>
+      <div class="calculator-options">
+        <RouterLink to="/simple-calculator" class="calculator-card">
+          <h3>Simple Calculator</h3>
+          <p>Basic addition calculator for testing</p>
+        </RouterLink>
+        
+        <RouterLink to="/penman-monteith" class="calculator-card">
+          <h3>Penman-Monteith Calculator</h3>
+          <p>Full evapotranspiration calculator with all meteorological inputs</p>
+        </RouterLink>
       </div>
     </div>
     
@@ -59,42 +41,50 @@ const sum = computed(() => {
 </template>
 
 <style scoped>
-.calculator-section {
+.welcome-section {
   margin: 2rem 0;
+  text-align: center;
+}
+
+.welcome-section p {
+  font-size: 1.1rem;
+  margin-bottom: 2rem;
+  color: #666;
+}
+
+.calculator-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 2rem;
+  margin-top: 2rem;
+}
+
+.calculator-card {
   padding: 2rem;
   border: 1px solid #ddd;
   border-radius: 8px;
   background: #f9f9f9;
+  text-decoration: none;
+  color: inherit;
+  transition: all 0.3s ease;
 }
 
-.input-group {
-  margin-bottom: 1rem;
+.calculator-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  background: #f0f0f0;
 }
 
-.input-group label {
-  display: block;
-  margin-bottom: 0.5rem;
-  font-weight: bold;
+.calculator-card h3 {
+  margin: 0 0 1rem 0;
+  color: #2563eb;
+  font-size: 1.3rem;
 }
 
-.input-group input {
-  width: 100%;
-  padding: 0.5rem;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  font-size: 16px;
-}
-
-.result {
-  margin-top: 1.5rem;
-  padding: 1.5rem;
-  background: #2563eb;
-  color: white;
-  border-radius: 8px;
-  text-align: center;
-  font-size: 1.5rem;
-  font-weight: bold;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+.calculator-card p {
+  margin: 0;
+  color: #666;
+  font-size: 1rem;
 }
 
 .info-section {
