@@ -205,11 +205,6 @@ class WeatherService {
       if (!pointData || !pointData.properties) {
         throw new Error('No weather data available for the specified location')
       }
-      
-      // Debug logging for elevation data
-      console.log('Point data properties keys:', Object.keys(pointData.properties))
-      console.log('Elevation data:', pointData.properties.elevation)
-      console.log('Full point data structure:', JSON.stringify(pointData, null, 2))
 
       // Get gridpoints data which contains current observations
       const gridX = pointData.properties.gridX
@@ -245,13 +240,6 @@ class WeatherService {
       const temperaturesC = temperatureSources.map((t: any) => t.valueCelsius)
       const maxTemp = Math.max(...temperaturesC) // Max in Celsius
       const minTemp = Math.min(...temperaturesC) // Min in Celsius
-      
-      // Debug logging to verify conversion
-      console.log('Temperature conversion check:')
-      temperatureSources.forEach((temp: any) => {
-        console.log(`${temp.period}: ${temp.value}°F → ${temp.valueCelsius.toFixed(1)}°C`)
-      })
-      console.log(`Final range: ${minTemp.toFixed(1)}°C to ${maxTemp.toFixed(1)}°C`)
 
       // Extract humidity from today's periods and calculate daily average
       const humidityValues = todayPeriods
@@ -409,12 +397,7 @@ class WeatherService {
         if (elevationData.uom) {
           if (elevationData.uom.includes('ft') || elevationData.uom.includes('feet')) {
             elevation = elevation * 0.3048 // Convert feet to meters
-            console.log('Found elevation from gridpoints:', elevationData.value, 'ft →', elevation.toFixed(1), 'm')
-          } else {
-            console.log('Found elevation from gridpoints:', elevation, 'm')
           }
-        } else {
-          console.log('Found elevation from gridpoints:', elevation, 'm (no unit specified)')
         }
         
         return elevation
@@ -432,12 +415,10 @@ class WeatherService {
     
     for (const elevation of elevationSources) {
       if (typeof elevation === 'number' && elevation !== null && !isNaN(elevation)) {
-        console.log('Found elevation from point data:', elevation, 'meters')
         return elevation
       }
     }
     
-    console.warn('No elevation data found in weather.gov response, using 0')
     return 0
   }
 
