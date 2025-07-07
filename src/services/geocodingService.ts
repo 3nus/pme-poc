@@ -183,6 +183,57 @@ class GeocodingService {
     
     return parts.join(', ')
   }
+
+  /**
+   * Search for locations with autocomplete suggestions
+   * @param query - Search query string
+   * @param limit - Maximum number of results (default: 5)
+   * @returns Promise<GeocodeResult[]>
+   */
+  async searchLocations(query: string, limit: number = 5): Promise<GeocodeResult[]> {
+    if (!query || query.trim().length < 2) {
+      return []
+    }
+
+    try {
+      const response = await this.axiosInstance.get<NominatimResult[]>(
+        `${this.nominatimBaseURL}/search`,
+        {
+          params: {
+            q: query.trim(),
+            format: 'json',
+            addressdetails: 1,
+            limit: limit,
+            countrycodes: 'us', // Limit to US for weather.gov compatibility
+            'accept-language': 'en'
+          }
+        }
+      )
+
+      if (!response.data || response.data.length === 0) {
+        return []
+      }
+
+      return response.data.map((result): GeocodeResult => ({
+        latitude: parseFloat(result.lat),
+        longitude: parseFloat(result.lon),
+        formattedAddress: result.display_name,
+        addressComponents: {
+          street: result.address?.road || result.address?.house_number 
+            ? `${result.address.house_number || ''} ${result.address.road || ''}`.trim()
+            : undefined,
+          city: result.address?.city || result.address?.town || result.address?.village,
+          state: result.address?.state,
+          country: result.address?.country,
+          postalCode: result.address?.postcode
+        }
+      }))
+
+    } catch (error) {
+      console.warn('Location search failed:', error)
+      return []
+    }
+  }
 }
 
 export const geocodingService = new GeocodingService()

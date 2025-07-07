@@ -39,9 +39,9 @@ const stressCoefficient = ref<number>(1)
 const locationMode = ref<LocationInputMode>({ type: 'address' })
 
 // Unit preferences
-const temperatureUnit = ref<'C' | 'F'>('C')
-const altitudeUnit = ref<'m' | 'ft'>('m')
-const windSpeedUnit = ref<'m/s' | 'mph'>('m/s')
+const temperatureUnit = ref<'C' | 'F'>('F')
+const altitudeUnit = ref<'m' | 'ft'>('ft')
+const windSpeedUnit = ref<'m/s' | 'mph'>('mph')
 
 // Manual location input
 const locationLat = ref<number>(0)
@@ -78,45 +78,101 @@ const showSourceData = ref<boolean>(false)
 // Weather data fetch timestamp
 const lastWeatherFetch = ref<Date | null>(null)
 
-// Address geocoding
-const geocodeAddress = async () => {
-  if (!geocodingService.validateAddress(addressInput.value)) {
-    geocodeError.value = 'Please enter at least city and state'
+// Modern search functionality
+const searchQuery = ref<string>('')
+const searchSuggestions = ref<GeocodeResult[]>([])
+const showSuggestions = ref<boolean>(false)
+const isSearching = ref<boolean>(false)
+const searchDebounceTimer = ref<number | null>(null)
+
+// Modern search functionality
+const searchForLocation = async () => {
+  if (!searchQuery.value.trim()) {
+    locationError.value = 'Please enter a location to search'
     return
   }
 
-  loadingGeocode.value = true
-  geocodeError.value = ''
+  isSearching.value = true
+  locationError.value = ''
 
   try {
-    const result = await geocodingService.geocodeAddress(addressInput.value)
-    geocodeResult.value = result
+    const results = await geocodingService.searchLocations(searchQuery.value.trim(), 1)
 
-    // Update manual lat/lon fields
-    locationLat.value = result.latitude
-    locationLon.value = result.longitude
+    if (results.length > 0) {
+      const result = results[0]
+      geocodeResult.value = result
+
+      // Update coordinates
+      locationLat.value = result.latitude
+      locationLon.value = result.longitude
+
+      // Clear suggestions
+      showSuggestions.value = false
+
+      // Automatically fetch weather data for the selected location
+      fetchWeatherData()
+    } else {
+      locationError.value = 'No locations found. Try a different search term.'
+    }
   } catch (error) {
-    geocodeError.value = error instanceof Error ? error.message : 'Failed to geocode address'
-    geocodeResult.value = null
+    locationError.value = error instanceof Error ? error.message : 'Search failed'
   } finally {
-    loadingGeocode.value = false
+    isSearching.value = false
   }
+}
+
+const handleSearchInput = () => {
+  // Clear previous timer
+  if (searchDebounceTimer.value) {
+    clearTimeout(searchDebounceTimer.value)
+  }
+
+  // Hide suggestions if query is too short
+  if (searchQuery.value.trim().length < 2) {
+    showSuggestions.value = false
+    searchSuggestions.value = []
+    return
+  }
+
+  // Debounce search suggestions
+  searchDebounceTimer.value = setTimeout(async () => {
+    try {
+      const results = await geocodingService.searchLocations(searchQuery.value.trim(), 5)
+      searchSuggestions.value = results
+      showSuggestions.value = results.length > 0
+    } catch (error) {
+      console.warn('Search suggestions failed:', error)
+      showSuggestions.value = false
+    }
+  }, 300) as unknown as number
+}
+
+const selectSuggestion = (suggestion: GeocodeResult) => {
+  searchQuery.value = suggestion.formattedAddress
+  geocodeResult.value = suggestion
+  locationLat.value = suggestion.latitude
+  locationLon.value = suggestion.longitude
+  showSuggestions.value = false
+  searchSuggestions.value = []
+
+  // Automatically fetch weather data for the selected location
+  fetchWeatherData()
+}
+
+const hideSuggestions = () => {
+  // Small delay to allow click events on suggestions
+  setTimeout(() => {
+    showSuggestions.value = false
+  }, 150)
 }
 
 // Weather data fetching
 const fetchWeatherData = async () => {
-  let targetLat = locationLat.value
-  let targetLon = locationLon.value
-
-  // If in address mode and no coordinates, try to geocode first
-  if (locationMode.value.type === 'address' && (targetLat === 0 || targetLon === 0)) {
-    await geocodeAddress()
-    targetLat = locationLat.value
-    targetLon = locationLon.value
-  }
+  const targetLat = locationLat.value
+  const targetLon = locationLon.value
 
   if (targetLat === 0 || targetLon === 0) {
-    weatherError.value = 'Please provide valid location coordinates or address'
+    weatherError.value = 'Please set a location using the search field above'
     return
   }
 
@@ -131,19 +187,19 @@ const fetchWeatherData = async () => {
 
     const data = await weatherService.getProcessedWeatherData(location)
     weatherData.value = data
-    
+
     // Record the fetch timestamp
     lastWeatherFetch.value = new Date()
 
-    // Show modal to inform user about temperature source
-    showTemperatureModal.value = true
+    // Show modal to inform user about temperature source - Commented out for now
+    // showTemperatureModal.value = true
 
     // Auto-populate base values (always in metric units)
     baseMaxTemp.value = data.maxTemperature
     baseMinTemp.value = data.minTemperature
     baseWindSpeed.value = data.windSpeed
     baseAltitude.value = data.station.elevation
-    
+
     // Set display values using current unit preferences
     maxTemp.value = displayTemperature(data.maxTemperature)
     minTemp.value = displayTemperature(data.minTemperature)
@@ -207,6 +263,9 @@ const getCurrentLocation = async () => {
       console.warn('Could not reverse geocode current location:', reverseError)
       // Location coordinates are still set, just no address
     }
+
+    // Automatically fetch weather data for the current location
+    fetchWeatherData()
   } catch (error) {
     if (error instanceof GeolocationPositionError) {
       switch (error.code) {
@@ -386,7 +445,27 @@ const et0 = computed(() => {
 
 <template>
   <main>
-    <h1>Penman-Monteith ET₀ Calculator</h1>
+    <div class="page-header">
+      <h1>Penman-Monteith ET₀ Calculator</h1>
+      <div class="header-buttons">
+        <button
+          @click="fetchWeatherData"
+          :disabled="loadingWeather || (locationLat === 0 && locationLon === 0)"
+          class="refresh-btn page-action"
+          :class="{ loading: loadingWeather }"
+          title="Refresh Weather Data"
+        >
+          🔄
+        </button>
+        <button
+          @click="openUnitsModal"
+          class="units-settings-btn page-settings"
+          title="Unit Settings"
+        >
+          ⚙️
+        </button>
+      </div>
+    </div>
 
     <div class="calculator-container">
       <!-- Weather Data Fetching Section -->
@@ -394,14 +473,6 @@ const et0 = computed(() => {
         <div class="panel-header">
           <h2>Location</h2>
           <div class="header-controls">
-            <button
-              @click="getCurrentLocation"
-              :disabled="loadingLocation"
-              class="current-location-btn"
-              title="Use current location"
-            >
-              {{ loadingLocation ? '📍...' : '📍 Current Location' }}
-            </button>
             <button
               @click="toggleLocationPanel"
               class="minimize-btn"
@@ -412,126 +483,135 @@ const et0 = computed(() => {
           </div>
         </div>
 
+        <!-- Location name display when collapsed -->
+        <div
+          v-if="locationPanelMinimized && (geocodeResult || (locationLat && locationLon))"
+          class="location-name"
+        >
+          {{
+            geocodeResult?.formattedAddress ||
+            `${locationLat.toFixed(4)}, ${locationLon.toFixed(4)}`
+          }}
+        </div>
+
         <div v-if="locationError" class="error-message">
           {{ locationError }}
         </div>
 
         <div v-show="!locationPanelMinimized" class="panel-content">
-          <!-- Location Input Mode Toggle -->
-          <div class="location-mode-toggle">
-            <button @click="toggleLocationMode" class="mode-toggle-btn">
-              {{
-                locationMode.type === 'address'
-                  ? 'Switch to Manual Coordinates'
-                  : 'Switch to Address Lookup'
-              }}
-            </button>
-          </div>
+          <!-- Modern Location Search -->
+          <div class="location-search">
+            <div class="search-container">
+              <div class="search-input-group">
+                <button
+                  @click="getCurrentLocation"
+                  :disabled="loadingLocation"
+                  class="current-location-chevron"
+                  title="Use current location"
+                >
+                  {{ loadingLocation ? '📍' : '📍' }}
+                </button>
 
-          <!-- Address Input Mode -->
-          <div v-if="locationMode.type === 'address'" class="address-inputs">
-            <h3>Address Lookup</h3>
-
-            <div class="input-group">
-              <label for="street">Street Address (optional):</label>
-              <input
-                id="street"
-                v-model="addressInput.street"
-                type="text"
-                placeholder="e.g., 123 Main Street"
-              />
-            </div>
-
-            <div class="input-row">
-              <div class="input-group">
-                <label for="city">City:</label>
                 <input
-                  id="city"
-                  v-model="addressInput.city"
+                  v-model="searchQuery"
+                  @input="handleSearchInput"
+                  @focus="handleSearchInput"
+                  @blur="hideSuggestions"
                   type="text"
-                  placeholder="e.g., New York"
-                  required
+                  placeholder="Search for a city, address, or landmark..."
+                  class="search-input"
                 />
+
+                <button
+                  @click="searchForLocation"
+                  :disabled="isSearching || !searchQuery.trim()"
+                  class="search-btn"
+                >
+                  {{ isSearching ? '🔄' : '🔍' }}
+                </button>
               </div>
 
-              <div class="input-group">
-                <label for="state">State:</label>
-                <input
-                  id="state"
-                  v-model="addressInput.state"
-                  type="text"
-                  placeholder="e.g., NY"
-                  required
-                />
+              <!-- Search Suggestions -->
+              <div
+                v-if="showSuggestions && searchSuggestions.length > 0"
+                class="suggestions-dropdown"
+              >
+                <div
+                  v-for="(suggestion, index) in searchSuggestions"
+                  :key="index"
+                  @click="selectSuggestion(suggestion)"
+                  class="suggestion-item"
+                >
+                  <div class="suggestion-name">
+                    {{ suggestion.addressComponents.city || 'Unknown City' }},
+                    {{ suggestion.addressComponents.state || 'Unknown State' }}
+                  </div>
+                  <div class="suggestion-address">{{ suggestion.formattedAddress }}</div>
+                </div>
               </div>
             </div>
 
-            <button @click="geocodeAddress" :disabled="loadingGeocode" class="geocode-btn">
-              {{ loadingGeocode ? 'Looking up...' : 'Set Location' }}
-            </button>
-
-            <div v-if="geocodeError" class="error-message">
-              {{ geocodeError }}
-            </div>
-
-            <div v-if="geocodeResult" class="geocode-info">
-              <h4>Found Location:</h4>
-              <p>{{ geocodeResult.formattedAddress }}</p>
-              <p>
-                Coordinates: {{ geocodeResult.latitude.toFixed(6) }},
+            <!-- Selected Location Display -->
+            <div v-if="geocodeResult" class="selected-location">
+              <h4>📍 Selected Location</h4>
+              <p class="location-name">{{ geocodeResult.formattedAddress }}</p>
+              <p class="location-coords">
+                Latitude: {{ geocodeResult.latitude.toFixed(6) }}, Longitude:
                 {{ geocodeResult.longitude.toFixed(6) }}
               </p>
+              <p class="location-altitude">
+                Altitude: {{ displayAltitude(weatherData?.station?.elevation || 0) }}
+                {{ altitudeUnit }}
+              </p>
             </div>
+
+            <!-- Manual Coordinates - Commented out for now -->
+            <!--
+            <details class="manual-coords">
+              <summary>Manual Coordinates</summary>
+              <div class="input-row">
+                <div class="input-group">
+                  <label for="locationLat">Latitude:</label>
+                  <input
+                    id="locationLat"
+                    v-model.number="locationLat"
+                    type="number"
+                    step="0.000001"
+                    min="-90"
+                    max="90"
+                    placeholder="e.g., 40.7128"
+                  />
+                </div>
+
+                <div class="input-group">
+                  <label for="locationLon">Longitude:</label>
+                  <input
+                    id="locationLon"
+                    v-model.number="locationLon"
+                    type="number"
+                    step="0.000001"
+                    min="-180"
+                    max="180"
+                    placeholder="e.g., -74.0060"
+                  />
+                </div>
+              </div>
+            </details>
+            -->
           </div>
 
-          <!-- Manual Coordinates Input Mode -->
-          <div v-if="locationMode.type === 'manual'" class="manual-inputs">
-            <h3>Manual Coordinates</h3>
-
-            <div class="input-row">
-              <div class="input-group">
-                <label for="locationLat">Latitude:</label>
-                <input
-                  id="locationLat"
-                  v-model.number="locationLat"
-                  type="number"
-                  step="0.000001"
-                  min="-90"
-                  max="90"
-                  placeholder="e.g., 40.7128"
-                />
-              </div>
-
-              <div class="input-group">
-                <label for="locationLon">Longitude:</label>
-                <input
-                  id="locationLon"
-                  v-model.number="locationLon"
-                  type="number"
-                  step="0.000001"
-                  min="-180"
-                  max="180"
-                  placeholder="e.g., -74.0060"
-                />
-              </div>
-            </div>
-          </div>
-
-          <!-- Weather Data Fetch Button -->
+          <!-- Weather Data Fetch Button - Commented out for now -->
+          <!--
           <div class="weather-fetch-section">
             <button
               @click="fetchWeatherData"
-              :disabled="loadingWeather || loadingGeocode"
+              :disabled="loadingWeather || isSearching"
               class="weather-fetch-btn"
             >
               {{ loadingWeather ? 'Loading Weather...' : 'Fetch Weather Data' }}
             </button>
-
-            <div v-if="weatherError" class="error-message">
-              {{ weatherError }}
-            </div>
-
           </div>
+          -->
         </div>
       </div>
 
@@ -541,12 +621,10 @@ const et0 = computed(() => {
           <div class="header-title">
             <h2>Meteorological Data</h2>
             <div v-if="lastWeatherFetch" class="fetch-timestamp">
-              Last updated: {{ lastWeatherFetch.toLocaleString('en-US', { timeZoneName: 'short' }) }}
+              Last updated:
+              {{ lastWeatherFetch.toLocaleString('en-US', { timeZoneName: 'short' }) }}
             </div>
           </div>
-          <button @click="openUnitsModal" class="units-settings-btn" title="Unit Settings">
-            ⚙️
-          </button>
         </div>
 
         <div class="input-group">
@@ -615,7 +693,7 @@ const et0 = computed(() => {
               <h3>Weather Station: {{ weatherData.station.name }}</h3>
               <p>Data automatically populated above from latest observations</p>
             </div>
-            <button 
+            <button
               v-if="hasSourceData"
               @click="showSourceData = !showSourceData"
               class="source-data-btn"
@@ -623,45 +701,54 @@ const et0 = computed(() => {
               {{ showSourceData ? 'Hide' : 'Show' }} Source Data
             </button>
           </div>
-          
+
           <!-- Source Data Details -->
           <div v-if="showSourceData && hasSourceData" class="source-data-panel">
             <h4>📊 Detailed Source Data</h4>
-            <p><strong>Forecast Date:</strong> {{ new Date(sourceData?.forecastDate || '').toLocaleDateString() }}</p>
-            
+            <p>
+              <strong>Forecast Date:</strong>
+              {{ new Date(sourceData?.forecastDate || '').toLocaleDateString() }}
+            </p>
+
             <!-- API Source URLs -->
             <div class="source-urls">
               <h5>🔗 Data Source URLs</h5>
               <div class="url-links">
                 <div v-if="sourceData?.forecastUrl" class="url-item">
-                  <strong>Forecast Data:</strong> 
+                  <strong>Forecast Data:</strong>
                   <a :href="sourceData?.forecastUrl" target="_blank" rel="noopener noreferrer">
                     {{ sourceData?.forecastUrl }}
                   </a>
                 </div>
                 <div v-if="sourceData?.pointDataUrl" class="url-item">
-                  <strong>Point Data (Elevation):</strong> 
+                  <strong>Point Data (Elevation):</strong>
                   <a :href="sourceData?.pointDataUrl" target="_blank" rel="noopener noreferrer">
                     {{ sourceData?.pointDataUrl }}
                   </a>
                 </div>
               </div>
             </div>
-            
+
             <!-- Temperature Sources -->
             <div class="source-section">
               <h5>🌡️ Temperature Data</h5>
               <div class="source-items">
-                <div 
-                  v-for="(temp, index) in sourceData?.temperatures || []" 
+                <div
+                  v-for="(temp, index) in sourceData?.temperatures || []"
                   :key="index"
                   class="source-item"
                 >
                   <strong>{{ temp.period }}:</strong> {{ temp.value }}°F
-                  <br>
+                  <br />
                   <small>{{ new Date(temp.date).toLocaleString() }} - {{ temp.source }}</small>
-                  <br>
-                  <a v-if="temp.url" :href="temp.url" target="_blank" rel="noopener noreferrer" class="source-link">
+                  <br />
+                  <a
+                    v-if="temp.url"
+                    :href="temp.url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="source-link"
+                  >
                     🔗 View Source
                   </a>
                 </div>
@@ -672,16 +759,24 @@ const et0 = computed(() => {
             <div class="source-section">
               <h5>💧 Humidity Data</h5>
               <div class="source-items">
-                <div 
-                  v-for="(humidity, index) in sourceData?.humidity || []" 
+                <div
+                  v-for="(humidity, index) in sourceData?.humidity || []"
                   :key="index"
                   class="source-item"
                 >
                   <strong>{{ humidity.period }}:</strong> {{ humidity.value }}%
-                  <br>
-                  <small>{{ new Date(humidity.date).toLocaleString() }} - {{ humidity.source }}</small>
-                  <br>
-                  <a v-if="humidity.url" :href="humidity.url" target="_blank" rel="noopener noreferrer" class="source-link">
+                  <br />
+                  <small
+                    >{{ new Date(humidity.date).toLocaleString() }} - {{ humidity.source }}</small
+                  >
+                  <br />
+                  <a
+                    v-if="humidity.url"
+                    :href="humidity.url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="source-link"
+                  >
                     🔗 View Source
                   </a>
                 </div>
@@ -692,16 +787,22 @@ const et0 = computed(() => {
             <div v-if="(sourceData?.windSpeed || []).length > 0" class="source-section">
               <h5>💨 Wind Speed Data</h5>
               <div class="source-items">
-                <div 
-                  v-for="(wind, index) in sourceData?.windSpeed || []" 
+                <div
+                  v-for="(wind, index) in sourceData?.windSpeed || []"
                   :key="index"
                   class="source-item"
                 >
                   <strong>{{ wind.period }}:</strong> {{ wind.value.toFixed(1) }} m/s
-                  <br>
+                  <br />
                   <small>{{ new Date(wind.date).toLocaleString() }} - {{ wind.source }}</small>
-                  <br>
-                  <a v-if="wind.url" :href="wind.url" target="_blank" rel="noopener noreferrer" class="source-link">
+                  <br />
+                  <a
+                    v-if="wind.url"
+                    :href="wind.url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="source-link"
+                  >
                     🔗 View Source
                   </a>
                 </div>
@@ -712,6 +813,7 @@ const et0 = computed(() => {
       </div>
 
       <!-- Site-Specific Data Section -->
+      <!--
       <div class="input-section">
         <h2>Site-Specific Data</h2>
 
@@ -752,6 +854,7 @@ const et0 = computed(() => {
           />
         </div>
       </div>
+      -->
 
       <!-- Key Parameters Section -->
       <div class="input-section">
@@ -889,6 +992,8 @@ const et0 = computed(() => {
     </div>
 
     <!-- Temperature Data Source Modal -->
+    <!-- Weather Data Sources Modal - Commented out for now -->
+    <!--
     <div v-if="showTemperatureModal" class="modal-overlay" @click="showTemperatureModal = false">
       <div class="modal-content" @click.stop>
         <div class="modal-header">
@@ -921,6 +1026,7 @@ const et0 = computed(() => {
         </div>
       </div>
     </div>
+    -->
 
     <!-- Units Settings Modal -->
     <div v-if="showUnitsModal" class="modal-overlay" @click="closeUnitsModal">
@@ -931,18 +1037,18 @@ const et0 = computed(() => {
         </div>
         <div class="modal-body">
           <p><strong>Choose your preferred units:</strong></p>
-          
+
           <!-- Temperature Unit Toggle -->
           <div class="unit-toggle-group">
             <label class="unit-toggle-label">🌡️ Temperature:</label>
             <div class="unit-toggle">
-              <button 
+              <button
                 @click="toggleTemperatureUnit"
                 :class="['unit-btn', 'metric', { active: temperatureUnit === 'C' }]"
               >
                 °C
               </button>
-              <button 
+              <button
                 @click="toggleTemperatureUnit"
                 :class="['unit-btn', 'imperial', { active: temperatureUnit === 'F' }]"
               >
@@ -955,13 +1061,13 @@ const et0 = computed(() => {
           <div class="unit-toggle-group">
             <label class="unit-toggle-label">📏 Altitude:</label>
             <div class="unit-toggle">
-              <button 
+              <button
                 @click="toggleAltitudeUnit"
                 :class="['unit-btn', 'metric', { active: altitudeUnit === 'm' }]"
               >
                 m
               </button>
-              <button 
+              <button
                 @click="toggleAltitudeUnit"
                 :class="['unit-btn', 'imperial', { active: altitudeUnit === 'ft' }]"
               >
@@ -974,13 +1080,13 @@ const et0 = computed(() => {
           <div class="unit-toggle-group">
             <label class="unit-toggle-label">💨 Wind Speed:</label>
             <div class="unit-toggle">
-              <button 
+              <button
                 @click="toggleWindSpeedUnit"
                 :class="['unit-btn', 'metric', { active: windSpeedUnit === 'm/s' }]"
               >
                 m/s
               </button>
-              <button 
+              <button
                 @click="toggleWindSpeedUnit"
                 :class="['unit-btn', 'imperial', { active: windSpeedUnit === 'mph' }]"
               >
@@ -1002,6 +1108,67 @@ const et0 = computed(() => {
 </template>
 
 <style scoped>
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.page-header h1 {
+  margin: 0;
+}
+
+.header-buttons {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.units-settings-btn.page-settings,
+.refresh-btn.page-action {
+  position: relative;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.units-settings-btn.page-settings:hover,
+.refresh-btn.page-action:hover {
+  background: #e2e8f0;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.refresh-btn.page-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.refresh-btn.page-action:disabled:hover {
+  background: #f8fafc;
+  transform: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.refresh-btn.page-action.loading {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .calculator-container {
   max-width: 1200px;
   margin: 0 auto;
@@ -1028,6 +1195,13 @@ const et0 = computed(() => {
 }
 
 .fetch-timestamp {
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin-top: 0.25rem;
+  font-style: italic;
+}
+
+.location-name {
   font-size: 0.8rem;
   color: #6b7280;
   margin-top: 0.25rem;
@@ -1313,7 +1487,7 @@ const et0 = computed(() => {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .source-items {
     grid-template-columns: 1fr;
   }
@@ -1664,11 +1838,18 @@ const et0 = computed(() => {
 
 .unit-btn.metric {
   border-right: 1px solid #e5e7eb;
+  background: #d1fae5;
+  color: #065f46;
 }
 
 .unit-btn:hover {
   background: #f3f4f6;
   color: #374151;
+}
+
+.unit-btn.metric:hover {
+  background: #a7f3d0;
+  color: #064e3b;
 }
 
 .unit-btn.active {
@@ -1683,6 +1864,194 @@ const et0 = computed(() => {
 
 .unit-btn.imperial.active {
   background: #dc2626;
+}
+
+/* Modern Search Interface Styles */
+.location-search {
+  margin-bottom: 1.5rem;
+}
+
+.search-container {
+  position: relative;
+}
+
+.search-input-group {
+  display: flex;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.search-input-group:focus-within {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.current-location-chevron {
+  background: #10b981;
+  color: white;
+  border: none;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: background 0.2s;
+  font-size: 1.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 50px;
+}
+
+.current-location-chevron:hover:not(:disabled) {
+  background: #059669;
+}
+
+.current-location-chevron:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.search-input {
+  flex: 1;
+  border: none;
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
+  outline: none;
+  background: white;
+}
+
+.search-input::placeholder {
+  color: #9ca3af;
+}
+
+.search-btn {
+  background: #2563eb;
+  color: white;
+  border: none;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: background 0.2s;
+  font-size: 1.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 50px;
+}
+
+.search-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.search-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.suggestions-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.suggestion-item {
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  border-bottom: 1px solid #f3f4f6;
+  transition: background 0.2s;
+}
+
+.suggestion-item:hover {
+  background: #f8fafc;
+}
+
+.suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.suggestion-name {
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 0.25rem;
+}
+
+.suggestion-address {
+  font-size: 0.85rem;
+  color: #6b7280;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-location {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 6px;
+}
+
+.selected-location h4 {
+  margin: 0 0 0.5rem 0;
+  color: #0369a1;
+  font-size: 1rem;
+}
+
+.location-name {
+  margin: 0 0 0.25rem 0;
+  font-weight: 500;
+  color: #1e293b;
+}
+
+.location-coords {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #64748b;
+  font-family: monospace;
+}
+
+.location-altitude {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #64748b;
+  font-family: monospace;
+}
+
+.manual-coords {
+  margin-top: 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.manual-coords summary {
+  padding: 0.75rem 1rem;
+  background: #f8fafc;
+  cursor: pointer;
+  font-weight: 500;
+  color: #374151;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.manual-coords summary:hover {
+  background: #f1f5f9;
+}
+
+.manual-coords[open] summary {
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.manual-coords .input-row {
+  padding: 1rem;
+  background: white;
 }
 
 @media (min-width: 768px) {
