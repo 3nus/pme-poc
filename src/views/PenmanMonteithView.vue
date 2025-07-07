@@ -725,6 +725,19 @@ const et0 = computed(() => {
             placeholder="Latitude (+ for North, - for South)"
           />
         </div>
+
+        <div class="input-group">
+          <label for="longitude">Longitude (degrees):</label>
+          <input
+            id="longitude"
+            v-model.number="locationLon"
+            type="number"
+            step="0.01"
+            min="-180"
+            max="180"
+            placeholder="Longitude (+ for East, - for West)"
+          />
+        </div>
       </div>
 
       <!-- Key Parameters Section -->
