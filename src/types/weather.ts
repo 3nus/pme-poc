@@ -125,6 +125,16 @@ export interface WeatherObservationsResponse {
   features: WeatherObservationResponse[]
 }
 
+// Source data for each meteorological parameter
+export interface WeatherDataSource {
+  value: number
+  date: string
+  source: string
+  period?: string
+  url?: string
+  valueCelsius?: number // For temperature sources that come in Fahrenheit
+}
+
 // Processed weather data for Penman-Monteith calculations
 export interface ProcessedWeatherData {
   maxTemperature: number // °C
@@ -140,6 +150,14 @@ export interface ProcessedWeatherData {
     elevation: number
   }
   timestamp: string
+  sourceData?: {
+    temperatures: WeatherDataSource[]
+    humidity: WeatherDataSource[]
+    windSpeed: WeatherDataSource[]
+    forecastDate: string
+    forecastUrl?: string
+    pointDataUrl?: string
+  }
 }
 
 // Location for weather station lookup
