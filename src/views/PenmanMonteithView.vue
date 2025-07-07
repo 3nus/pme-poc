@@ -75,6 +75,9 @@ const showUnitsModal = ref<boolean>(false)
 // Source data visibility
 const showSourceData = ref<boolean>(false)
 
+// Weather data fetch timestamp
+const lastWeatherFetch = ref<Date | null>(null)
+
 // Address geocoding
 const geocodeAddress = async () => {
   if (!geocodingService.validateAddress(addressInput.value)) {
@@ -128,6 +131,9 @@ const fetchWeatherData = async () => {
 
     const data = await weatherService.getProcessedWeatherData(location)
     weatherData.value = data
+    
+    // Record the fetch timestamp
+    lastWeatherFetch.value = new Date()
 
     // Show modal to inform user about temperature source
     showTemperatureModal.value = true
@@ -386,7 +392,7 @@ const et0 = computed(() => {
       <!-- Weather Data Fetching Section -->
       <div class="input-section location-panel" :class="{ minimized: locationPanelMinimized }">
         <div class="panel-header">
-          <h2>Location & Weather Data</h2>
+          <h2>Location</h2>
           <div class="header-controls">
             <button
               @click="getCurrentLocation"
@@ -461,7 +467,7 @@ const et0 = computed(() => {
             </div>
 
             <button @click="geocodeAddress" :disabled="loadingGeocode" class="geocode-btn">
-              {{ loadingGeocode ? 'Looking up...' : 'Find Coordinates' }}
+              {{ loadingGeocode ? 'Looking up...' : 'Set Location' }}
             </button>
 
             <div v-if="geocodeError" class="error-message">
@@ -525,106 +531,6 @@ const et0 = computed(() => {
               {{ weatherError }}
             </div>
 
-            <div v-if="weatherData" class="weather-info">
-              <div class="weather-info-header">
-                <div>
-                  <h3>Weather Station: {{ weatherData.station.name }}</h3>
-                  <p>Data automatically populated below from latest observations</p>
-                </div>
-                <button 
-                  v-if="hasSourceData"
-                  @click="showSourceData = !showSourceData"
-                  class="source-data-btn"
-                >
-                  {{ showSourceData ? 'Hide' : 'Show' }} Source Data
-                </button>
-              </div>
-              
-              <!-- Source Data Details -->
-              <div v-if="showSourceData && hasSourceData" class="source-data-panel">
-                <h4>📊 Detailed Source Data</h4>
-                <p><strong>Forecast Date:</strong> {{ new Date(sourceData?.forecastDate || '').toLocaleDateString() }}</p>
-                
-                <!-- API Source URLs -->
-                <div class="source-urls">
-                  <h5>🔗 Data Source URLs</h5>
-                  <div class="url-links">
-                    <div v-if="sourceData?.forecastUrl" class="url-item">
-                      <strong>Forecast Data:</strong> 
-                      <a :href="sourceData?.forecastUrl" target="_blank" rel="noopener noreferrer">
-                        {{ sourceData?.forecastUrl }}
-                      </a>
-                    </div>
-                    <div v-if="sourceData?.pointDataUrl" class="url-item">
-                      <strong>Point Data (Elevation):</strong> 
-                      <a :href="sourceData?.pointDataUrl" target="_blank" rel="noopener noreferrer">
-                        {{ sourceData?.pointDataUrl }}
-                      </a>
-                    </div>
-                  </div>
-                </div>
-                
-                <!-- Temperature Sources -->
-                <div class="source-section">
-                  <h5>🌡️ Temperature Data</h5>
-                  <div class="source-items">
-                    <div 
-                      v-for="(temp, index) in sourceData?.temperatures || []" 
-                      :key="index"
-                      class="source-item"
-                    >
-                      <strong>{{ temp.period }}:</strong> {{ temp.value }}°F
-                      <br>
-                      <small>{{ new Date(temp.date).toLocaleString() }} - {{ temp.source }}</small>
-                      <br>
-                      <a v-if="temp.url" :href="temp.url" target="_blank" rel="noopener noreferrer" class="source-link">
-                        🔗 View Source
-                      </a>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Humidity Sources -->
-                <div class="source-section">
-                  <h5>💧 Humidity Data</h5>
-                  <div class="source-items">
-                    <div 
-                      v-for="(humidity, index) in sourceData?.humidity || []" 
-                      :key="index"
-                      class="source-item"
-                    >
-                      <strong>{{ humidity.period }}:</strong> {{ humidity.value }}%
-                      <br>
-                      <small>{{ new Date(humidity.date).toLocaleString() }} - {{ humidity.source }}</small>
-                      <br>
-                      <a v-if="humidity.url" :href="humidity.url" target="_blank" rel="noopener noreferrer" class="source-link">
-                        🔗 View Source
-                      </a>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Wind Speed Sources -->
-                <div v-if="(sourceData?.windSpeed || []).length > 0" class="source-section">
-                  <h5>💨 Wind Speed Data</h5>
-                  <div class="source-items">
-                    <div 
-                      v-for="(wind, index) in sourceData?.windSpeed || []" 
-                      :key="index"
-                      class="source-item"
-                    >
-                      <strong>{{ wind.period }}:</strong> {{ wind.value.toFixed(1) }} m/s
-                      <br>
-                      <small>{{ new Date(wind.date).toLocaleString() }} - {{ wind.source }}</small>
-                      <br>
-                      <a v-if="wind.url" :href="wind.url" target="_blank" rel="noopener noreferrer" class="source-link">
-                        🔗 View Source
-                      </a>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -632,7 +538,12 @@ const et0 = computed(() => {
       <!-- Meteorological Data Section -->
       <div class="input-section">
         <div class="section-header">
-          <h2>Meteorological Data</h2>
+          <div class="header-title">
+            <h2>Meteorological Data</h2>
+            <div v-if="lastWeatherFetch" class="fetch-timestamp">
+              Last updated: {{ lastWeatherFetch.toLocaleString('en-US', { timeZoneName: 'short' }) }}
+            </div>
+          </div>
           <button @click="openUnitsModal" class="units-settings-btn" title="Unit Settings">
             ⚙️
           </button>
@@ -695,6 +606,108 @@ const et0 = computed(() => {
             min="0"
             placeholder="Solar radiation"
           />
+        </div>
+
+        <!-- Weather Station Information -->
+        <div v-if="weatherData" class="weather-info">
+          <div class="weather-info-header">
+            <div>
+              <h3>Weather Station: {{ weatherData.station.name }}</h3>
+              <p>Data automatically populated above from latest observations</p>
+            </div>
+            <button 
+              v-if="hasSourceData"
+              @click="showSourceData = !showSourceData"
+              class="source-data-btn"
+            >
+              {{ showSourceData ? 'Hide' : 'Show' }} Source Data
+            </button>
+          </div>
+          
+          <!-- Source Data Details -->
+          <div v-if="showSourceData && hasSourceData" class="source-data-panel">
+            <h4>📊 Detailed Source Data</h4>
+            <p><strong>Forecast Date:</strong> {{ new Date(sourceData?.forecastDate || '').toLocaleDateString() }}</p>
+            
+            <!-- API Source URLs -->
+            <div class="source-urls">
+              <h5>🔗 Data Source URLs</h5>
+              <div class="url-links">
+                <div v-if="sourceData?.forecastUrl" class="url-item">
+                  <strong>Forecast Data:</strong> 
+                  <a :href="sourceData?.forecastUrl" target="_blank" rel="noopener noreferrer">
+                    {{ sourceData?.forecastUrl }}
+                  </a>
+                </div>
+                <div v-if="sourceData?.pointDataUrl" class="url-item">
+                  <strong>Point Data (Elevation):</strong> 
+                  <a :href="sourceData?.pointDataUrl" target="_blank" rel="noopener noreferrer">
+                    {{ sourceData?.pointDataUrl }}
+                  </a>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Temperature Sources -->
+            <div class="source-section">
+              <h5>🌡️ Temperature Data</h5>
+              <div class="source-items">
+                <div 
+                  v-for="(temp, index) in sourceData?.temperatures || []" 
+                  :key="index"
+                  class="source-item"
+                >
+                  <strong>{{ temp.period }}:</strong> {{ temp.value }}°F
+                  <br>
+                  <small>{{ new Date(temp.date).toLocaleString() }} - {{ temp.source }}</small>
+                  <br>
+                  <a v-if="temp.url" :href="temp.url" target="_blank" rel="noopener noreferrer" class="source-link">
+                    🔗 View Source
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <!-- Humidity Sources -->
+            <div class="source-section">
+              <h5>💧 Humidity Data</h5>
+              <div class="source-items">
+                <div 
+                  v-for="(humidity, index) in sourceData?.humidity || []" 
+                  :key="index"
+                  class="source-item"
+                >
+                  <strong>{{ humidity.period }}:</strong> {{ humidity.value }}%
+                  <br>
+                  <small>{{ new Date(humidity.date).toLocaleString() }} - {{ humidity.source }}</small>
+                  <br>
+                  <a v-if="humidity.url" :href="humidity.url" target="_blank" rel="noopener noreferrer" class="source-link">
+                    🔗 View Source
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <!-- Wind Speed Sources -->
+            <div v-if="(sourceData?.windSpeed || []).length > 0" class="source-section">
+              <h5>💨 Wind Speed Data</h5>
+              <div class="source-items">
+                <div 
+                  v-for="(wind, index) in sourceData?.windSpeed || []" 
+                  :key="index"
+                  class="source-item"
+                >
+                  <strong>{{ wind.period }}:</strong> {{ wind.value.toFixed(1) }} m/s
+                  <br>
+                  <small>{{ new Date(wind.date).toLocaleString() }} - {{ wind.source }}</small>
+                  <br>
+                  <a v-if="wind.url" :href="wind.url" target="_blank" rel="noopener noreferrer" class="source-link">
+                    🔗 View Source
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1008,6 +1021,17 @@ const et0 = computed(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 1rem;
+}
+
+.header-title {
+  flex: 1;
+}
+
+.fetch-timestamp {
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin-top: 0.25rem;
+  font-style: italic;
 }
 
 .input-section h2 {
