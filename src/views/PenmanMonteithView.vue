@@ -147,16 +147,64 @@ const handleSearchInput = () => {
   }, 300) as unknown as number
 }
 
-const selectSuggestion = (suggestion: GeocodeResult) => {
+const selectSuggestion = async (suggestion: GeocodeResult) => {
   searchQuery.value = suggestion.formattedAddress
   geocodeResult.value = suggestion
-  locationLat.value = suggestion.latitude
-  locationLon.value = suggestion.longitude
   showSuggestions.value = false
   searchSuggestions.value = []
 
-  // Automatically fetch weather data for the selected location
-  fetchWeatherData()
+  // Check if we need to fetch coordinates
+  if (suggestion.latitude === 0 || suggestion.longitude === 0) {
+    console.log('🎯 Vue: Fetching coordinates for selected address:', suggestion.formattedAddress)
+    console.log('🎯 Vue: PlaceId:', suggestion._placeId)
+    isSearching.value = true
+    locationError.value = ''
+
+    try {
+      // Get the Google Places provider to fetch coordinates
+      const providers = geocodingService.getProviders()
+      console.log('🎯 Vue: Available providers:', providers.map(p => p.name))
+      const googleProvider = providers.find(p => p.name.includes('Google'))
+      console.log('🎯 Vue: Found Google provider:', !!googleProvider)
+      
+      if (googleProvider && 'getCoordinatesForAddress' in googleProvider) {
+        console.log('🎯 Vue: Calling getCoordinatesForAddress...')
+        const coords = await (googleProvider as any).getCoordinatesForAddress(
+          suggestion.formattedAddress,
+          suggestion._placeId
+        )
+        console.log('🎯 Vue: Received coordinates:', coords)
+        
+        if (coords) {
+          console.log('✅ Got coordinates:', coords)
+          locationLat.value = coords.latitude
+          locationLon.value = coords.longitude
+          
+          // Update the suggestion object with the coordinates
+          suggestion.latitude = coords.latitude
+          suggestion.longitude = coords.longitude
+          geocodeResult.value = suggestion
+          
+          // Automatically fetch weather data for the selected location
+          fetchWeatherData()
+        } else {
+          locationError.value = 'Could not get coordinates for this location'
+        }
+      } else {
+        locationError.value = 'Google Places provider not available'
+      }
+    } catch (error) {
+      console.error('Failed to get coordinates:', error)
+      locationError.value = 'Failed to get coordinates for this location'
+    } finally {
+      isSearching.value = false
+    }
+  } else {
+    // Coordinates already available
+    locationLat.value = suggestion.latitude
+    locationLon.value = suggestion.longitude
+    fetchWeatherData()
+  }
 }
 
 const hideSuggestions = () => {
@@ -542,10 +590,6 @@ const et0 = computed(() => {
                   @click="selectSuggestion(suggestion)"
                   class="suggestion-item"
                 >
-                  <div class="suggestion-name">
-                    {{ suggestion.addressComponents.city || 'Unknown City' }},
-                    {{ suggestion.addressComponents.state || 'Unknown State' }}
-                  </div>
                   <div class="suggestion-address">{{ suggestion.formattedAddress }}</div>
                 </div>
               </div>
