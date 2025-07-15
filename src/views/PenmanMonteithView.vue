@@ -78,12 +78,32 @@ const showSourceData = ref<boolean>(false)
 // Weather data fetch timestamp
 const lastWeatherFetch = ref<Date | null>(null)
 
+// Computed property for Google Maps Static API URL
+const mapImageUrl = computed(() => {
+  if (!geocodeResult.value || geocodeResult.value.latitude === 0 || geocodeResult.value.longitude === 0) {
+    return ''
+  }
+  
+  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
+  const lat = geocodeResult.value.latitude
+  const lng = geocodeResult.value.longitude
+  
+  return `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=16&size=300x200&maptype=${mapViewType.value}&markers=color:red%7C${lat},${lng}&key=${apiKey}`
+})
+
 // Modern search functionality
 const searchQuery = ref<string>('')
 const searchSuggestions = ref<GeocodeResult[]>([])
 const showSuggestions = ref<boolean>(false)
 const isSearching = ref<boolean>(false)
 const searchDebounceTimer = ref<number | null>(null)
+
+// Map view toggle
+const mapViewType = ref<'roadmap' | 'satellite'>('satellite')
+
+const toggleMapView = () => {
+  mapViewType.value = mapViewType.value === 'satellite' ? 'roadmap' : 'satellite'
+}
 
 // Modern search functionality
 const searchForLocation = async () => {
@@ -612,6 +632,26 @@ const et0 = computed(() => {
                 Altitude: {{ displayAltitude(weatherData?.station?.elevation || 0) }}
                 {{ altitudeUnit }}
               </p>
+              
+              <!-- Google Maps Static Image -->
+              <div class="location-map">
+                <div class="map-header">
+                  <span class="map-title">📍 Map View</span>
+                  <button 
+                    @click="toggleMapView"
+                    class="map-toggle-btn"
+                    :title="`Switch to ${mapViewType === 'satellite' ? 'road' : 'satellite'} view`"
+                  >
+                    {{ mapViewType === 'satellite' ? '🗺️' : '🛰️' }}
+                    {{ mapViewType === 'satellite' ? 'Road' : 'Satellite' }}
+                  </button>
+                </div>
+                <img 
+                  :src="mapImageUrl"
+                  alt="Map showing selected location"
+                  class="map-image"
+                />
+              </div>
             </div>
 
             <!-- Manual Coordinates - Commented out for now -->
@@ -2113,5 +2153,50 @@ const et0 = computed(() => {
   .result-section {
     grid-column: 1 / -1;
   }
+}
+
+/* Map styling */
+.location-map {
+  margin-top: 1rem;
+}
+
+.map-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.map-title {
+  font-weight: 500;
+  color: #374151;
+}
+
+.map-toggle-btn {
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.map-toggle-btn:hover {
+  background: #e5e7eb;
+  transform: translateY(-1px);
+}
+
+.map-image {
+  width: 100%;
+  max-width: 300px;
+  height: 200px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: opacity 0.3s ease;
 }
 </style>
