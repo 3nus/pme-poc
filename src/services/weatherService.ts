@@ -16,7 +16,9 @@ class WeatherService {
     baseURL: this.baseURL,
     timeout: 10000,
     headers: {
-      'User-Agent': this.userAgent,
+      // User-Agent is not allowed to be set by browsers.
+      // Preferred to pass this if we move to a backend service
+      // 'User-Agent': this.userAgent,
       Accept: 'application/json',
     },
   })
@@ -218,15 +220,19 @@ class WeatherService {
 
       // Get forecast data for daily min/max temperatures and other averages
       const forecastResponse = await this.axiosInstance.get(forecastUrl)
-      
-      if (!forecastResponse.data || !forecastResponse.data.properties || !forecastResponse.data.properties.periods) {
+
+      if (
+        !forecastResponse.data ||
+        !forecastResponse.data.properties ||
+        !forecastResponse.data.properties.periods
+      ) {
         throw new Error('No forecast data available')
       }
 
       // Get today's forecast periods (day and night)
       const periods = forecastResponse.data.properties.periods
       const todayPeriods = periods.slice(0, 2) // Today's day and night periods
-      
+
       // Extract temperatures from today's periods with source data
       // Note: weather.gov forecast API returns temperatures in Fahrenheit for US locations
       const temperatureSources = todayPeriods.map((period: any) => ({
@@ -235,7 +241,7 @@ class WeatherService {
         date: period.startTime,
         source: 'NWS Forecast',
         period: period.name,
-        url: forecastUrl
+        url: forecastUrl,
       }))
       const temperaturesC = temperatureSources.map((t: any) => t.valueCelsius)
       const maxTemp = Math.max(...temperaturesC) // Max in Celsius
@@ -245,22 +251,26 @@ class WeatherService {
       const humidityValues = todayPeriods
         .map((period: any) => period.relativeHumidity?.value || period.relativeHumidity)
         .filter((humidity: any) => humidity !== null && humidity !== undefined && !isNaN(humidity))
-      
-      const avgHumidity = humidityValues.length > 0 
-        ? humidityValues.reduce((sum: number, val: number) => sum + val, 0) / humidityValues.length
-        : null
+
+      const avgHumidity =
+        humidityValues.length > 0
+          ? humidityValues.reduce((sum: number, val: number) => sum + val, 0) /
+            humidityValues.length
+          : null
 
       // Humidity sources with details
       const humiditySources = todayPeriods
         .map((period: any) => {
           const humidity = period.relativeHumidity?.value || period.relativeHumidity
-          return humidity !== null && humidity !== undefined && !isNaN(humidity) ? {
-            value: humidity,
-            date: period.startTime,
-            source: 'NWS Forecast',
-            period: period.name,
-            url: forecastUrl
-          } : null
+          return humidity !== null && humidity !== undefined && !isNaN(humidity)
+            ? {
+                value: humidity,
+                date: period.startTime,
+                source: 'NWS Forecast',
+                period: period.name,
+                url: forecastUrl,
+              }
+            : null
         })
         .filter((item: any) => item !== null)
 
@@ -271,49 +281,56 @@ class WeatherService {
           // Extract numeric value from strings like "10 mph", "15 to 20 mph", etc.
           const match = windSpeedText.match(/(\d+)/)
           const windSpeedMph = match ? parseInt(match[1]) : null
-          return windSpeedMph !== null ? {
-            value: windSpeedMph * 0.44704, // Convert to m/s
-            date: period.startTime,
-            source: 'NWS Forecast',
-            period: period.name,
-            url: forecastUrl
-          } : null
+          return windSpeedMph !== null
+            ? {
+                value: windSpeedMph * 0.44704, // Convert to m/s
+                date: period.startTime,
+                source: 'NWS Forecast',
+                period: period.name,
+                url: forecastUrl,
+              }
+            : null
         })
         .filter((item: any) => item !== null)
-      
+
       const windSpeedValues = windSpeedSources.map((w: any) => w.value)
-      const avgWindSpeed = windSpeedValues.length > 0 
-        ? windSpeedValues.reduce((sum: number, val: number) => sum + val, 0) / windSpeedValues.length
-        : null
+      const avgWindSpeed =
+        windSpeedValues.length > 0
+          ? windSpeedValues.reduce((sum: number, val: number) => sum + val, 0) /
+            windSpeedValues.length
+          : null
 
       // Always fetch gridpoints data to get elevation and as fallback for other data
       const gridResponse = await this.axiosInstance.get(`/gridpoints/${gridId}/${gridX},${gridY}`)
       const gridData = gridResponse.data.properties
-      
+
       // Use forecast values if available, otherwise fall back to gridpoints data
       let relativeHumidity: number
       let windSpeed: number
       let finalHumiditySources = humiditySources
-      
+
       if (avgHumidity !== null) {
         relativeHumidity = avgHumidity
       } else {
         // Fallback to gridpoints current humidity data
         const humidityData = gridData.relativeHumidity
-        const gridHumidity = humidityData && humidityData.values && humidityData.values.length > 0
-          ? humidityData.values[0].value
-          : 50 // Final fallback
-        
+        const gridHumidity =
+          humidityData && humidityData.values && humidityData.values.length > 0
+            ? humidityData.values[0].value
+            : 50 // Final fallback
+
         relativeHumidity = gridHumidity
-        
+
         // Add gridpoints humidity source to the sources array
-        finalHumiditySources = [{
-          value: gridHumidity,
-          date: new Date().toISOString(),
-          source: gridHumidity === 50 ? 'Default Value (50%)' : 'NWS Gridpoint Data',
-          period: 'Current',
-          url: `${this.baseURL}/gridpoints/${gridId}/${gridX},${gridY}`
-        }]
+        finalHumiditySources = [
+          {
+            value: gridHumidity,
+            date: new Date().toISOString(),
+            source: gridHumidity === 50 ? 'Default Value (50%)' : 'NWS Gridpoint Data',
+            period: 'Current',
+            url: `${this.baseURL}/gridpoints/${gridId}/${gridX},${gridY}`,
+          },
+        ]
       }
 
       if (avgWindSpeed !== null) {
@@ -321,9 +338,10 @@ class WeatherService {
       } else {
         // Fallback to gridpoints current wind speed data (already fetched above)
         const windData = gridData.windSpeed
-        const windSpeedValue = windData && windData.values && windData.values.length > 0
-          ? this.convertWindSpeedFromGrid(windData.values[0].value, windData.uom)
-          : 2 // Final fallback: 2 m/s
+        const windSpeedValue =
+          windData && windData.values && windData.values.length > 0
+            ? this.convertWindSpeedFromGrid(windData.values[0].value, windData.uom)
+            : 2 // Final fallback: 2 m/s
         windSpeed = windSpeedValue || 2
       }
 
@@ -347,8 +365,8 @@ class WeatherService {
           windSpeed: windSpeedSources,
           forecastDate: todayPeriods[0]?.startTime || new Date().toISOString(),
           forecastUrl: forecastUrl,
-          pointDataUrl: pointDataUrl
-        }
+          pointDataUrl: pointDataUrl,
+        },
       }
 
       return processedData
@@ -392,33 +410,33 @@ class WeatherService {
       const elevationData = gridData.elevation
       if (elevationData.value !== null && !isNaN(elevationData.value)) {
         let elevation = elevationData.value
-        
+
         // Convert to meters if needed based on unit of measure
         if (elevationData.uom) {
           if (elevationData.uom.includes('ft') || elevationData.uom.includes('feet')) {
             elevation = elevation * 0.3048 // Convert feet to meters
           }
         }
-        
+
         return elevation
       }
     }
-    
+
     // Fallback to point data elevation sources
     const elevationSources = [
       pointData.properties?.elevation?.value,
       pointData.properties?.elevation,
       pointData.properties?.elev,
       pointData.properties?.relativeLocation?.properties?.elevation?.value,
-      pointData.properties?.relativeLocation?.geometry?.coordinates?.[2] // Sometimes altitude is in coordinates[2]
+      pointData.properties?.relativeLocation?.geometry?.coordinates?.[2], // Sometimes altitude is in coordinates[2]
     ]
-    
+
     for (const elevation of elevationSources) {
       if (typeof elevation === 'number' && elevation !== null && !isNaN(elevation)) {
         return elevation
       }
     }
-    
+
     return 0
   }
 

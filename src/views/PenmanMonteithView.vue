@@ -307,9 +307,14 @@ const getCurrentLocation = async () => {
       }
 
       geocodeResult.value = reverseResult
+      
+      // Update the search box to show the current location
+      searchQuery.value = reverseResult.formattedAddress
     } catch (reverseError) {
       console.warn('Could not reverse geocode current location:', reverseError)
       // Location coordinates are still set, just no address
+      // Set search query to coordinates if reverse geocoding fails
+      searchQuery.value = `${locationLat.value}, ${locationLon.value}`
     }
 
     // Automatically fetch weather data for the current location
